@@ -59,7 +59,8 @@ PROGRAM_VERSION = "1.6"
 PROMPT_VERSION = "1.6"
 MODEL = "gpt-image-2"
 QUALITY = "medium"
-SUPPORTED_EXTENSIONS = {".jpg", ".jpeg"}
+QUALITY_OPTIONS = ("low", "medium")
+SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 LANDSCAPE_SIZE = "1536x1024"
 PORTRAIT_SIZE = "1024x1536"
 SQUARE_SIZE = "1024x1024"
@@ -69,6 +70,7 @@ JPEG_MIN_QUALITY = 78
 JPEG_QUALITY_STEP = 2
 DPI = (300, 300)
 OBSERVED_ESTIMATED_COST_PER_IMAGE = 0.28 / 6.0
+LOW_ESTIMATED_COST_PER_IMAGE = OBSERVED_ESTIMATED_COST_PER_IMAGE * 0.5
 MAX_RETRIES = 3
 RETRY_BASE_DELAY_SECONDS = 3
 NORMALIZED_LONG_EDGE = 1024
@@ -865,7 +867,7 @@ def append_history(
                 usage.input_tokens,
                 usage.output_tokens,
                 usage.total_tokens,
-                OBSERVED_ESTIMATED_COST_PER_IMAGE
+                estimated_cost_per_image(QUALITY)
                 if system_decision in {"PASS", "REVIEW"}
                 else None,
                 message,
@@ -1326,6 +1328,14 @@ class BatchSummary:
     usage_responses: int = 0
     fallback_cost: float = 0.0
     log_path: Path | None = None
+    quality: str = "medium"
+
+
+def estimated_cost_per_image(quality: str) -> float:
+    """Fallback estimate scaled from the preserved observed medium-quality cost."""
+    if quality == "low":
+        return LOW_ESTIMATED_COST_PER_IMAGE
+    return OBSERVED_ESTIMATED_COST_PER_IMAGE
 
 
 def configure_runtime_paths(
@@ -1346,13 +1356,25 @@ def configure_runtime_paths(
     HISTORY_DB = DATA_DIR / "image_history.sqlite3"
 
 
-def pending_images() -> tuple[list[Path], int]:
+def pending_images(selected_files: list[Path] | None = None) -> tuple[list[Path], int]:
     INPUT_DIR.mkdir(parents=True, exist_ok=True)
-    candidates = sorted(
-        file
-        for file in INPUT_DIR.iterdir()
-        if file.is_file() and file.suffix.lower() in SUPPORTED_EXTENSIONS
-    )
+    if selected_files:
+        incoming = INPUT_DIR.resolve()
+        candidates = sorted(
+            {
+                Path(file).resolve()
+                for file in selected_files
+                if Path(file).is_file()
+                and Path(file).suffix.lower() in SUPPORTED_EXTENSIONS
+                and Path(file).resolve().parent == incoming
+            }
+        )
+    else:
+        candidates = sorted(
+            file
+            for file in INPUT_DIR.iterdir()
+            if file.is_file() and file.suffix.lower() in SUPPORTED_EXTENSIONS
+        )
     pending = [
         file
         for file in candidates
@@ -1421,7 +1443,7 @@ def _log_row(
         "usage_total_tokens": usage.total_tokens or "",
         "usage_raw": usage.raw_usage,
         "fallback_estimated_cost": (
-            f"{OBSERVED_ESTIMATED_COST_PER_IMAGE:.6f}"
+            f"{estimated_cost_per_image(QUALITY):.6f}"
             if status in {"PASS", "REVIEW", "FAIL"}
             else ""
         ),
@@ -1432,18 +1454,24 @@ def _log_row(
 def process_batch(
     client: OpenAI,
     *,
+    selected_files: list[Path] | None = None,
+    quality: str = "medium",
     cancel_requested=lambda: False,
     event=lambda kind, payload: None,
 ) -> BatchSummary:
     """Run the v1.6 engine sequentially; designed for a GUI worker thread."""
+    if quality not in QUALITY_OPTIONS:
+        raise ValueError(f"Unsupported quality: {quality}")
+    global QUALITY
+    QUALITY = quality
     run_internal_regression_tests()
     for directory in (INPUT_DIR, OUTPUT_DIR, REVIEW_DIR, ERROR_DIR, LOG_DIR, DATA_DIR):
         directory.mkdir(parents=True, exist_ok=True)
     initialize_history_db()
     reconcile_history_labels()
     base_prompt = load_prompt()
-    files, skipped = pending_images()
-    summary = BatchSummary(total=len(files), skipped=skipped)
+    files, skipped = pending_images(selected_files)
+    summary = BatchSummary(total=len(files), skipped=skipped, quality=quality)
     if not files:
         return summary
     log_path = create_log_file()
@@ -1556,7 +1584,7 @@ def process_batch(
             event("failed", {"filename": input_file.name, "error": str(error)})
     summary.fallback_cost = (
         summary.completed + summary.review
-    ) * OBSERVED_ESTIMATED_COST_PER_IMAGE
+    ) * estimated_cost_per_image(quality)
     return summary
 
 
@@ -1591,6 +1619,8 @@ def launch_gui() -> int:
             QPushButton,
             QScrollArea,
             QSplitter,
+            QTableWidget,
+            QTableWidgetItem,
             QVBoxLayout,
             QWidget,
         )
@@ -1603,15 +1633,19 @@ def launch_gui() -> int:
         event_signal = Signal(str, object)
         complete = Signal(object)
 
-        def __init__(self, client):
+        def __init__(self, client, selected_files, quality):
             super().__init__()
             self.client = client
+            self.selected_files = selected_files
+            self.quality = quality
             self.cancelled = False
 
         @Slot()
         def run(self):
             summary = process_batch(
                 self.client,
+                selected_files=self.selected_files,
+                quality=self.quality,
                 cancel_requested=lambda: self.cancelled,
                 event=lambda kind, payload: self.event_signal.emit(kind, payload),
             )
@@ -1744,34 +1778,61 @@ def launch_gui() -> int:
             self.resize(980, 760)
             self.thread = None
             self.worker = None
+            self.selected_files: set[Path] = set()
             self.review_window = ReviewWindow(self)
             self.review_window.reprocess.connect(lambda _filename: self.start())
             root = QWidget()
             layout = QVBoxLayout(root)
             form = QGridLayout()
             defaults = [INPUT_DIR, OUTPUT_DIR, REVIEW_DIR, ERROR_DIR, LOG_DIR]
-            labels = ["Input", "Completed", "NeedsReview", "Error", "Logs"]
+            labels = ["Incoming Folder", "Completed", "NeedsReview", "Error", "Logs"]
             self.path_labels = []
             for row, (name, path) in enumerate(zip(labels, defaults)):
+                display_row = row if row == 0 else row + 1
                 label = QLabel(str(path))
                 label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-                choose = QPushButton("Choose…")
+                choose = QPushButton("Choose Folder…" if row == 0 else "Choose…")
                 choose.clicked.connect(lambda checked=False, i=row: self.choose_folder(i))
                 open_button = QPushButton("Open in Finder")
                 open_button.clicked.connect(lambda checked=False, i=row: self.open_folder(i))
-                form.addWidget(QLabel(name), row, 0)
-                form.addWidget(label, row, 1)
-                form.addWidget(choose, row, 2)
-                form.addWidget(open_button, row, 3)
+                form.addWidget(QLabel(name), display_row, 0)
+                form.addWidget(label, display_row, 1)
+                form.addWidget(choose, display_row, 2)
+                form.addWidget(open_button, display_row, 3)
                 self.path_labels.append(label)
+            selection_help = QLabel(
+                "Select specific images, or leave the selection empty to process all "
+                "supported images in the Incoming folder."
+            )
+            selection_help.setWordWrap(True)
+            form.addWidget(selection_help, 1, 1, 1, 3)
             self.model_label = QLabel(MODEL)
             self.quality = QComboBox()
-            self.quality.addItems(["medium"])
-            form.addWidget(QLabel("Model"), 5, 0)
-            form.addWidget(self.model_label, 5, 1)
-            form.addWidget(QLabel("Quality"), 5, 2)
-            form.addWidget(self.quality, 5, 3)
+            self.quality.addItems(list(QUALITY_OPTIONS))
+            self.quality.setCurrentText("medium")
+            form.addWidget(QLabel("Model"), 6, 0)
+            form.addWidget(self.model_label, 6, 1)
+            form.addWidget(QLabel("Quality"), 6, 2)
+            form.addWidget(self.quality, 6, 3)
             layout.addLayout(form)
+            selection_actions = QHBoxLayout()
+            for text, handler in (
+                ("Select Images…", self.select_images),
+                ("Select All", self.select_all),
+                ("Clear Selection", self.clear_selection),
+            ):
+                button = QPushButton(text)
+                button.clicked.connect(handler)
+                selection_actions.addWidget(button)
+            selection_actions.addStretch(1)
+            layout.addLayout(selection_actions)
+            self.selected_table = QTableWidget(0, 3)
+            self.selected_table.setHorizontalHeaderLabels(
+                ["Filename", "File Size", "Selection Status"]
+            )
+            self.selected_table.horizontalHeader().setStretchLastSection(True)
+            self.selected_table.setMaximumHeight(170)
+            layout.addWidget(self.selected_table)
             stats = QHBoxLayout()
             self.image_count = QLabel("Images: 0")
             self.cost = QLabel("Estimated cost: $0.00")
@@ -1804,6 +1865,7 @@ def launch_gui() -> int:
             self.log.setReadOnly(True)
             layout.addWidget(self.log, 1)
             self.setCentralWidget(root)
+            self.quality.currentTextChanged.connect(self.on_quality_changed)
             self.analyze()
 
         def apply_paths(self):
@@ -1813,7 +1875,82 @@ def launch_gui() -> int:
             chosen = QFileDialog.getExistingDirectory(self, "Choose folder", self.path_labels[index].text())
             if chosen:
                 self.path_labels[index].setText(chosen)
+                if index == 0:
+                    self.selected_files.clear()
+                    self.refresh_selection_table()
                 self.analyze()
+
+        def select_images(self):
+            self.apply_paths()
+            INPUT_DIR.mkdir(parents=True, exist_ok=True)
+            filenames, _ = QFileDialog.getOpenFileNames(
+                self,
+                "Select images from Incoming",
+                str(INPUT_DIR),
+                "Images (*.jpg *.jpeg *.png)",
+            )
+            if not filenames:
+                return
+            incoming = INPUT_DIR.resolve()
+            outside = [Path(name) for name in filenames if Path(name).resolve().parent != incoming]
+            if outside:
+                QMessageBox.warning(
+                    self,
+                    "Images must be inside Incoming",
+                    "Only files directly inside the current Incoming folder can be selected:\n\n"
+                    + "\n".join(path.name for path in outside),
+                )
+            self.selected_files.update(
+                Path(name).resolve()
+                for name in filenames
+                if Path(name).resolve().parent == incoming
+                and Path(name).suffix.lower() in SUPPORTED_EXTENSIONS
+            )
+            self.refresh_selection_table()
+            self.analyze()
+
+        def select_all(self):
+            self.apply_paths()
+            INPUT_DIR.mkdir(parents=True, exist_ok=True)
+            self.selected_files = {
+                path.resolve()
+                for path in INPUT_DIR.iterdir()
+                if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS
+            }
+            self.refresh_selection_table()
+            self.analyze()
+
+        def clear_selection(self):
+            self.selected_files.clear()
+            self.refresh_selection_table()
+            self.analyze()
+
+        def refresh_selection_table(self):
+            files = sorted(self.selected_files)
+            self.selected_table.setRowCount(len(files))
+            for row, path in enumerate(files):
+                if not path.exists():
+                    size = "—"
+                    status = "Missing"
+                else:
+                    size = f"{path.stat().st_size / 1_000_000:.2f} MB"
+                    if (OUTPUT_DIR / path.name).exists():
+                        status = "Skipped — already completed"
+                    elif (REVIEW_DIR / path.name).exists():
+                        status = "Skipped — already reviewed"
+                    else:
+                        status = "Selected — ready"
+                for column, value in enumerate((path.name, size, status)):
+                    self.selected_table.setItem(row, column, QTableWidgetItem(value))
+
+        def selected_or_all(self) -> list[Path] | None:
+            return sorted(self.selected_files) if self.selected_files else None
+
+        def on_quality_changed(self, quality):
+            global QUALITY
+            QUALITY = quality
+            self.log.appendPlainText(f"Quality selected: {quality}")
+            self.analyze()
 
         def open_folder(self, index):
             path = Path(self.path_labels[index].text())
@@ -1822,17 +1959,23 @@ def launch_gui() -> int:
 
         def analyze(self):
             self.apply_paths()
-            files, skipped = pending_images()
+            files, skipped = pending_images(self.selected_or_all())
+            quality = self.quality.currentText()
             self.image_count.setText(f"Images to process: {len(files)} (existing skipped: {skipped})")
-            self.cost.setText(f"Estimated cost: ${len(files) * OBSERVED_ESTIMATED_COST_PER_IMAGE:.2f}")
+            self.cost.setText(
+                f"Estimated cost: ${len(files) * estimated_cost_per_image(quality):.2f}"
+            )
             self.progress.setRange(0, max(1, len(files)))
             self.progress.setValue(0)
+            self.refresh_selection_table()
 
         def start(self):
             self.analyze()
-            files, skipped = pending_images()
+            selected = self.selected_or_all()
+            files, skipped = pending_images(selected)
+            quality = self.quality.currentText()
             if not files:
-                QMessageBox.information(self, "Nothing to process", "No pending JPEG images were found.")
+                QMessageBox.information(self, "Nothing to process", "No pending supported images were found.")
                 return
             if skipped:
                 QMessageBox.information(
@@ -1843,7 +1986,8 @@ def launch_gui() -> int:
             answer = QMessageBox.question(
                 self,
                 "Confirm paid processing",
-                f"Process {len(files)} image(s)? Estimated cost: ${len(files) * OBSERVED_ESTIMATED_COST_PER_IMAGE:.2f}.",
+                f"Process {len(files)} image(s) at {quality} quality? "
+                f"Estimated cost: ${len(files) * estimated_cost_per_image(quality):.2f}.",
             )
             if answer != QMessageBox.Yes:
                 return
@@ -1853,7 +1997,8 @@ def launch_gui() -> int:
                 QMessageBox.critical(self, "API key missing", "Set OPENAI_API_KEY in the environment or local .env file.")
                 return
             self.thread = QThread(self)
-            self.worker = Worker(OpenAI(api_key=key))
+            self.log.appendPlainText(f"Starting batch with quality: {quality}")
+            self.worker = Worker(OpenAI(api_key=key), selected, quality)
             self.worker.moveToThread(self.thread)
             self.thread.started.connect(self.worker.run)
             self.worker.event_signal.connect(self.on_event)
@@ -1879,6 +2024,8 @@ def launch_gui() -> int:
             elif kind == "finished":
                 self.progress.setValue(self.progress.value() + 1)
                 self.log.appendPlainText(f"{payload['status']}: {payload['filename']} — {' | '.join(payload['messages'])}")
+                self.selected_files.discard((INPUT_DIR / payload["filename"]).resolve())
+                self.refresh_selection_table()
             elif kind == "failed":
                 self.progress.setValue(self.progress.value() + 1)
                 self.log.appendPlainText(f"FAILED: {payload['filename']} — {payload['error']}")
@@ -1901,6 +2048,7 @@ def launch_gui() -> int:
                 self,
                 "Batch summary",
                 f"Completed: {summary.completed}\nNeedsReview: {summary.review}\nErrors: {summary.failed}\n"
+                f"Quality: {summary.quality}\n"
                 f"Cancelled: {'Yes' if summary.cancelled else 'No'}\n"
                 f"Fallback estimated spend: ${summary.fallback_cost:.2f}\n{usage}",
             )
