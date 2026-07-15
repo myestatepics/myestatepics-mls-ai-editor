@@ -32,3 +32,5 @@ Archive/
 dist/
 build/
 *.egg-info/
+
+.venv/
