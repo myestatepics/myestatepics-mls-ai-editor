@@ -1,0 +1,72 @@
+MYESTATEPICS MLS INTERIOR — PRODUCTION BASE PROMPT v1.6
+
+PHOTO CORRECTION ONLY
+
+The original photograph is the absolute source of truth. Create a professional
+MLS interior enhancement that looks like a carefully edited Lightroom image.
+
+Do not redesign, restage, add, remove, replace, move, or reshape anything.
+Do not alter architecture, furniture, fixtures, room geometry, window geometry,
+reflections, or exterior structures.
+
+PRIORITY ORDER
+
+1. Preserve exact material identity and room geometry.
+2. Establish strictly neutral white balance with no global cast.
+3. Produce naturally bright MLS exposure while retaining depth.
+4. Recover crisp, realistic exterior detail through windows.
+5. Make genuine visible open sky soft natural light blue.
+
+MATERIAL COLOR LOCK
+
+Preserve the photographed hue and relative color of walls, ceilings, trim,
+cabinets, countertops, flooring, tile, stone, wood, carpet, rugs, furniture,
+fabric, and fixtures.
+
+Beige remains beige. Greige remains greige. Cream remains cream. Warm wood
+remains warm wood. Dark cabinets remain their photographed color. Do not
+whiten, gray, cool, warm, enrich, or desaturate materials.
+
+STRICTLY NEUTRAL WHITE BALANCE
+
+Neutral walls, ceilings, trim, white cabinetry, and white countertops must
+render neutral—not yellow, orange, green, magenta, blue, cyan, or cold gray.
+
+Remove any unwanted global color cast, but do not replace one cast with
+another. Preserve genuinely warm bulbs and warm materials locally without
+allowing that warmth to spread across the whole room.
+
+EXPOSURE AND DEPTH
+
+Brighten only as much as needed for a professional MLS result. Use balanced
+exposure, shadow recovery, and midtone recovery. Preserve black depth and
+architectural dimensionality. Avoid glowing walls, clipped ceilings, gray
+shadows, flat HDR tonality, haze, or synthetic rendering.
+
+WINDOW DETAIL
+
+Recover real exterior detail present in the source: brick, siding, roofs,
+window frames, trees, grass, landscaping, and neighboring structures.
+
+Exterior detail should be crisp, clear, and naturally contrasted—not soft,
+foggy, washed out, or covered by cyan haze. Preserve clean edges without
+halos or artificial oversharpening.
+
+LIGHT-BLUE SKY THROUGH WINDOWS
+
+Where genuine open sky is visible through a window, that open-sky area must
+appear as a subtle, natural, light daytime blue.
+
+Apply blue only to genuine open-sky pixels. Never tint window glass as a whole,
+reflections, buildings, roofs, siding, brick, trees, grass, landscaping,
+window frames, curtains, walls, ceilings, cabinetry, countertops, or furniture.
+
+If uncertain whether an area is sky or structure, preserve the photographed
+color and do not apply blue. Do not invent buildings, trees, landscaping,
+clouds, or other exterior scenery.
+
+OUTPUT QUALITY
+
+Retain natural texture, fine detail, and photographic realism. Avoid painterly,
+rendered, plastic, AI-generated, HDR-heavy, hazy, or overprocessed appearance.
+Do not add text, logos, watermarks, borders, or artificial framing.

@@ -1,0 +1,14 @@
+.env
+__pycache__/
+*.pyc
+.DS_Store
+
+Incoming/
+Completed/
+NeedsReview/
+Error/
+Logs/
+Data/
+Archive/
+
+*.sqlite3
