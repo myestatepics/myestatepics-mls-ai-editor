@@ -1,7 +1,21 @@
 .env
-__pycache__/
-*.pyc
 .DS_Store
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+runtime/Incoming/*
+runtime/Completed/*
+runtime/NeedsReview/*
+runtime/Error/*
+runtime/Logs/*
+runtime/Data/*
+!runtime/Incoming/.gitkeep
+!runtime/Completed/.gitkeep
+!runtime/NeedsReview/.gitkeep
+!runtime/Error/.gitkeep
+!runtime/Logs/.gitkeep
+!runtime/Data/.gitkeep
 
 Incoming/
 Completed/
@@ -10,5 +24,11 @@ Error/
 Logs/
 Data/
 Archive/
-
+*.sqlite
 *.sqlite3
+*.db
+*.log
+*.tmp
+dist/
+build/
+*.egg-info/
