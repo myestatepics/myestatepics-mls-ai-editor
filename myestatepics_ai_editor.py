@@ -44,8 +44,9 @@ from PIL import Image, ImageFilter
 from dotenv import load_dotenv
 
 
-PROJECT_DIR = Path(__file__).resolve().parent
-RUNTIME_DIR = PROJECT_DIR / "runtime"
+APP_DIR = Path(__file__).resolve().parent
+PROJECT_DIR = APP_DIR
+RUNTIME_DIR = APP_DIR / "runtime"
 INPUT_DIR = RUNTIME_DIR / "Incoming"
 OUTPUT_DIR = RUNTIME_DIR / "Completed"
 REVIEW_DIR = RUNTIME_DIR / "NeedsReview"
@@ -53,12 +54,12 @@ ERROR_DIR = RUNTIME_DIR / "Error"
 LOG_DIR = RUNTIME_DIR / "Logs"
 DATA_DIR = RUNTIME_DIR / "Data"
 HISTORY_DB = DATA_DIR / "image_history.sqlite3"
-PROMPT_FILE = PROJECT_DIR / "legacy" / "myestatepics_mls_interior_prompt_v1_6.txt"
+PROMPT_FILE = APP_DIR / "legacy" / "myestatepics_mls_interior_prompt_v1_6.txt"
 
 PROGRAM_VERSION = "1.6"
 PROMPT_VERSION = "1.6"
 MODEL = "gpt-image-2"
-QUALITY = "medium"
+QUALITY = "low"
 QUALITY_OPTIONS = ("low", "medium")
 SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 LANDSCAPE_SIZE = "1536x1024"
@@ -112,6 +113,33 @@ class VerificationResult:
     highlight_clip_fraction: float
     shadow_crush_fraction: float
     sharpened: bool
+
+
+def validate_api_key(api_key: str | None) -> tuple[bool, str]:
+    """Validate without ever exposing the key or any fragment of it."""
+    if not api_key or not api_key.strip():
+        return False, "OPENAI_API_KEY is empty. Add a valid key to the project .env file."
+    key = api_key.strip()
+    lowered = key.lower()
+    if (
+        not key.startswith("sk-")
+        or "placeholder" in lowered
+        or "your_openai" in lowered
+        or "replace" in lowered
+        or "*" in key
+        or "…" in key
+        or "..." in key
+    ):
+        return False, "OPENAI_API_KEY in the project .env file is invalid or masked."
+    return True, "API key loaded from the project .env file."
+
+
+def load_project_api_key() -> tuple[str | None, str]:
+    """Reload the application-local .env and override stale shell values."""
+    load_dotenv(dotenv_path=APP_DIR / ".env", override=True)
+    api_key = os.getenv("OPENAI_API_KEY")
+    valid, message = validate_api_key(api_key)
+    return (api_key.strip() if valid and api_key else None), message
 
 
 def load_prompt() -> str:
@@ -916,8 +944,11 @@ def append_log(log_path: Path, row: dict[str, object]) -> None:
         "prompt_version",
         "model",
         "quality",
+        "processing_time_seconds",
+        "api_cost",
         "status",
         "destination",
+        "needs_review_reason",
         "requested_size",
         "output_width",
         "output_height",
@@ -996,12 +1027,9 @@ def run_internal_regression_tests() -> None:
 def main() -> None:
     run_internal_regression_tests()
 
-    api_key = os.getenv("OPENAI_API_KEY")
+    api_key, key_message = load_project_api_key()
     if not api_key:
-        raise RuntimeError(
-            'OPENAI_API_KEY is not set.\n'
-            'Run: export OPENAI_API_KEY="your_api_key_here"'
-        )
+        raise RuntimeError(key_message)
 
     client = OpenAI(api_key=api_key)
 
@@ -1326,9 +1354,21 @@ class BatchSummary:
     output_tokens: int = 0
     total_tokens: int = 0
     usage_responses: int = 0
+    api_calls: int = 0
     fallback_cost: float = 0.0
     log_path: Path | None = None
-    quality: str = "medium"
+    quality: str = "low"
+    elapsed_seconds: float = 0.0
+
+    @property
+    def images_processed(self) -> int:
+        return self.completed + self.review + self.failed
+
+    @property
+    def average_cost_per_image(self) -> float:
+        if not self.images_processed:
+            return 0.0
+        return self.fallback_cost / self.images_processed
 
 
 def estimated_cost_per_image(quality: str) -> float:
@@ -1408,6 +1448,9 @@ def _log_row(
     output_bytes: int | str = "",
     output_size: tuple[int, int] | None = None,
     message: str = "",
+    processing_time_seconds: float = 0.0,
+    api_cost: float = 0.0,
+    needs_review_reason: str = "",
 ) -> dict[str, object]:
     metrics = metrics or {}
     usage = usage or ApiUsage()
@@ -1418,8 +1461,11 @@ def _log_row(
         "prompt_version": PROMPT_VERSION,
         "model": MODEL,
         "quality": QUALITY,
+        "processing_time_seconds": f"{processing_time_seconds:.3f}",
+        "api_cost": f"{api_cost:.6f}",
         "status": status,
         "destination": str(destination),
+        "needs_review_reason": needs_review_reason,
         "requested_size": requested_size,
         "output_width": output_size[0] if output_size else "",
         "output_height": output_size[1] if output_size else "",
@@ -1455,7 +1501,7 @@ def process_batch(
     client: OpenAI,
     *,
     selected_files: list[Path] | None = None,
-    quality: str = "medium",
+    quality: str = "low",
     cancel_requested=lambda: False,
     event=lambda kind, payload: None,
 ) -> BatchSummary:
@@ -1464,6 +1510,7 @@ def process_batch(
         raise ValueError(f"Unsupported quality: {quality}")
     global QUALITY
     QUALITY = quality
+    batch_started = time.perf_counter()
     run_internal_regression_tests()
     for directory in (INPUT_DIR, OUTPUT_DIR, REVIEW_DIR, ERROR_DIR, LOG_DIR, DATA_DIR):
         directory.mkdir(parents=True, exist_ok=True)
@@ -1473,6 +1520,7 @@ def process_batch(
     files, skipped = pending_images(selected_files)
     summary = BatchSummary(total=len(files), skipped=skipped, quality=quality)
     if not files:
+        summary.elapsed_seconds = time.perf_counter() - batch_started
         return summary
     log_path = create_log_file()
     summary.log_path = log_path
@@ -1487,12 +1535,16 @@ def process_batch(
         requested_size = ""
         metrics: dict[str, Any] = {}
         usage = ApiUsage()
+        image_started = time.perf_counter()
+        api_call_completed = False
         try:
             metrics = analyze_input(input_file)
             prompt = f"{base_prompt}\n\n{build_adaptive_addendum(metrics)}"
             generated_bytes, requested_size, usage = call_image_editor(
                 client, input_file, prompt
             )
+            api_call_completed = True
+            summary.api_calls += 1
             with Image.open(BytesIO(generated_bytes)) as generated:
                 generated_image = generated.convert("RGB")
             generated_image, sharpened = maybe_apply_gentle_sharpening(
@@ -1502,14 +1554,22 @@ def process_batch(
             jpeg_bytes, jpeg_quality, oversize = encode_jpeg_under_limit(
                 generated_image, input_file
             )
+            review_reasons: list[str] = []
+            if min(generated_image.size) < 64:
+                review_reasons.append(
+                    f"Invalid generated dimensions: {generated_image.size[0]}x"
+                    f"{generated_image.size[1]}; each dimension must be at least 64 pixels."
+                )
+            if verification.status == "FAIL":
+                review_reasons.extend(verification.messages)
             if oversize:
-                if verification.status == "PASS":
-                    verification.status = "REVIEW"
-                verification.messages.append(
+                review_reasons.append(
                     f"JPEG remains above 2 MB at minimum quality {jpeg_quality}; "
                     "saved for manual Lightroom export."
                 )
-            destination = OUTPUT_DIR if verification.status == "PASS" else REVIEW_DIR
+            needs_review_reason = " | ".join(dict.fromkeys(review_reasons))
+            routing_status = "REVIEW" if needs_review_reason else "PASS"
+            destination = REVIEW_DIR if needs_review_reason else OUTPUT_DIR
             _atomic_write(destination / input_file.name, jpeg_bytes)
             if destination == OUTPUT_DIR:
                 summary.completed += 1
@@ -1520,12 +1580,14 @@ def process_batch(
             summary.input_tokens += usage.input_tokens or 0
             summary.output_tokens += usage.output_tokens or 0
             summary.total_tokens += usage.total_tokens or 0
-            message = " | ".join(verification.messages)
+            message = needs_review_reason or " | ".join(verification.messages)
+            image_elapsed = time.perf_counter() - image_started
+            image_cost = estimated_cost_per_image(quality)
             append_log(
                 log_path,
                 _log_row(
                     filename=input_file.name,
-                    status=verification.status,
+                    status=routing_status,
                     destination=destination,
                     requested_size=requested_size,
                     metrics=metrics,
@@ -1535,12 +1597,15 @@ def process_batch(
                     output_bytes=len(jpeg_bytes),
                     output_size=generated_image.size,
                     message=message,
+                    processing_time_seconds=image_elapsed,
+                    api_cost=image_cost,
+                    needs_review_reason=needs_review_reason,
                 ),
             )
             append_history(
                 run_id=run_id,
                 filename=input_file.name,
-                system_decision=verification.status,
+                system_decision=routing_status,
                 destination=str(destination),
                 metrics=metrics,
                 verification=verification,
@@ -1551,9 +1616,13 @@ def process_batch(
                 "finished",
                 {
                     "filename": input_file.name,
-                    "status": verification.status,
-                    "messages": verification.messages,
+                    "status": routing_status,
+                    "messages": [message],
                     "metrics": verification,
+                    "processing_time_seconds": image_elapsed,
+                    "api_cost": image_cost,
+                    "destination": str(destination),
+                    "needs_review_reason": needs_review_reason,
                 },
             )
         except Exception as error:
@@ -1569,6 +1638,8 @@ def process_batch(
                     metrics=metrics,
                     usage=usage,
                     message=str(error),
+                    processing_time_seconds=time.perf_counter() - image_started,
+                    api_cost=(estimated_cost_per_image(quality) if api_call_completed else 0.0),
                 ),
             )
             append_history(
@@ -1581,10 +1652,21 @@ def process_batch(
                 usage=usage,
                 message=str(error),
             )
-            event("failed", {"filename": input_file.name, "error": str(error)})
-    summary.fallback_cost = (
-        summary.completed + summary.review
-    ) * estimated_cost_per_image(quality)
+            event(
+                "failed",
+                {
+                    "filename": input_file.name,
+                    "error": str(error),
+                    "processing_time_seconds": time.perf_counter() - image_started,
+                    "api_cost": (
+                        estimated_cost_per_image(quality) if api_call_completed else 0.0
+                    ),
+                    "destination": str(ERROR_DIR),
+                    "needs_review_reason": "",
+                },
+            )
+    summary.fallback_cost = summary.api_calls * estimated_cost_per_image(quality)
+    summary.elapsed_seconds = time.perf_counter() - batch_started
     return summary
 
 
@@ -1778,6 +1860,8 @@ def launch_gui() -> int:
             self.resize(980, 760)
             self.thread = None
             self.worker = None
+            self.processing_active = False
+            self.api_key: str | None = None
             self.selected_files: set[Path] = set()
             self.review_window = ReviewWindow(self)
             self.review_window.reprocess.connect(lambda _filename: self.start())
@@ -1808,12 +1892,21 @@ def launch_gui() -> int:
             form.addWidget(selection_help, 1, 1, 1, 3)
             self.model_label = QLabel(MODEL)
             self.quality = QComboBox()
-            self.quality.addItems(list(QUALITY_OPTIONS))
-            self.quality.setCurrentText("medium")
+            self.quality.addItems(["Low", "Medium"])
+            self.quality.setCurrentText("Low")
             form.addWidget(QLabel("Model"), 6, 0)
             form.addWidget(self.model_label, 6, 1)
             form.addWidget(QLabel("Quality"), 6, 2)
             form.addWidget(self.quality, 6, 3)
+            self.api_key_status = QLabel()
+            self.open_env_button = QPushButton("Open .env")
+            self.open_env_button.clicked.connect(self.open_env)
+            self.reload_key_button = QPushButton("Reload API Key")
+            self.reload_key_button.clicked.connect(self.reload_api_key)
+            form.addWidget(QLabel("API Key"), 7, 0)
+            form.addWidget(self.api_key_status, 7, 1)
+            form.addWidget(self.open_env_button, 7, 2)
+            form.addWidget(self.reload_key_button, 7, 3)
             layout.addLayout(form)
             selection_actions = QHBoxLayout()
             for text, handler in (
@@ -1866,6 +1959,7 @@ def launch_gui() -> int:
             layout.addWidget(self.log, 1)
             self.setCentralWidget(root)
             self.quality.currentTextChanged.connect(self.on_quality_changed)
+            self.reload_api_key(show_error=False)
             self.analyze()
 
         def apply_paths(self):
@@ -1948,9 +2042,38 @@ def launch_gui() -> int:
 
         def on_quality_changed(self, quality):
             global QUALITY
-            QUALITY = quality
+            QUALITY = quality.lower()
             self.log.appendPlainText(f"Quality selected: {quality}")
             self.analyze()
+
+        def open_env(self):
+            env_path = APP_DIR / ".env"
+            if not env_path.exists():
+                QMessageBox.warning(
+                    self,
+                    "Project .env not found",
+                    "Create .env in the application folder, then click Reload API Key.",
+                )
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(APP_DIR)))
+                return
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(env_path)))
+
+        def reload_api_key(self, checked=False, show_error=True):
+            del checked
+            self.api_key, message = load_project_api_key()
+            valid = self.api_key is not None
+            self.api_key_status.setText(message)
+            self.api_key_status.setStyleSheet(
+                "color: #187a33;" if valid else "color: #b42318;"
+            )
+            if hasattr(self, "start_button"):
+                self.start_button.setEnabled(valid and not self.processing_active)
+            if valid:
+                if hasattr(self, "log"):
+                    self.log.appendPlainText("API key reloaded successfully from project .env.")
+            elif show_error:
+                QMessageBox.critical(self, "Invalid API key", message)
+            return valid
 
         def open_folder(self, index):
             path = Path(self.path_labels[index].text())
@@ -1960,7 +2083,7 @@ def launch_gui() -> int:
         def analyze(self):
             self.apply_paths()
             files, skipped = pending_images(self.selected_or_all())
-            quality = self.quality.currentText()
+            quality = self.quality.currentText().lower()
             self.image_count.setText(f"Images to process: {len(files)} (existing skipped: {skipped})")
             self.cost.setText(
                 f"Estimated cost: ${len(files) * estimated_cost_per_image(quality):.2f}"
@@ -1973,7 +2096,7 @@ def launch_gui() -> int:
             self.analyze()
             selected = self.selected_or_all()
             files, skipped = pending_images(selected)
-            quality = self.quality.currentText()
+            quality = self.quality.currentText().lower()
             if not files:
                 QMessageBox.information(self, "Nothing to process", "No pending supported images were found.")
                 return
@@ -1991,14 +2114,15 @@ def launch_gui() -> int:
             )
             if answer != QMessageBox.Yes:
                 return
-            load_dotenv(PROJECT_DIR / ".env")
-            key = os.getenv("OPENAI_API_KEY")
-            if not key:
-                QMessageBox.critical(self, "API key missing", "Set OPENAI_API_KEY in the environment or local .env file.")
+            if not self.reload_api_key(show_error=True):
                 return
+            api_key = self.api_key
+            if api_key is None:
+                return
+            client = OpenAI(api_key=api_key)
             self.thread = QThread(self)
             self.log.appendPlainText(f"Starting batch with quality: {quality}")
-            self.worker = Worker(OpenAI(api_key=key), selected, quality)
+            self.worker = Worker(client, selected, quality)
             self.worker.moveToThread(self.thread)
             self.thread.started.connect(self.worker.run)
             self.worker.event_signal.connect(self.on_event)
@@ -2006,6 +2130,7 @@ def launch_gui() -> int:
             self.worker.complete.connect(self.thread.quit)
             self.thread.finished.connect(self.worker.deleteLater)
             self.thread.finished.connect(self.thread.deleteLater)
+            self.processing_active = True
             self.start_button.setEnabled(False)
             self.cancel_button.setEnabled(True)
             self.thread.start()
@@ -2023,17 +2148,31 @@ def launch_gui() -> int:
                 self.log.appendPlainText(f"Processing {payload['filename']}…")
             elif kind == "finished":
                 self.progress.setValue(self.progress.value() + 1)
-                self.log.appendPlainText(f"{payload['status']}: {payload['filename']} — {' | '.join(payload['messages'])}")
+                review_reason = payload["needs_review_reason"] or "—"
+                self.log.appendPlainText(
+                    f"Filename: {payload['filename']} | Quality: {QUALITY} | "
+                    f"Processing time: {payload['processing_time_seconds']:.2f}s | "
+                    f"API cost: ${payload['api_cost']:.4f} | "
+                    f"Destination: {payload['destination']} | "
+                    f"NeedsReview reason: {review_reason}"
+                )
                 self.selected_files.discard((INPUT_DIR / payload["filename"]).resolve())
                 self.refresh_selection_table()
             elif kind == "failed":
                 self.progress.setValue(self.progress.value() + 1)
-                self.log.appendPlainText(f"FAILED: {payload['filename']} — {payload['error']}")
+                self.log.appendPlainText(
+                    f"Filename: {payload['filename']} | Quality: {QUALITY} | "
+                    f"Processing time: {payload['processing_time_seconds']:.2f}s | "
+                    f"API cost: ${payload['api_cost']:.4f} | "
+                    f"Destination: {payload['destination']} | NeedsReview reason: — | "
+                    f"Error: {payload['error']}"
+                )
             elif kind == "cancelled":
                 self.log.appendPlainText("Batch cancelled between images.")
 
         def on_complete(self, summary):
-            self.start_button.setEnabled(True)
+            self.processing_active = False
+            self.start_button.setEnabled(self.api_key is not None)
             self.cancel_button.setEnabled(False)
             self.current.setText("Current: —")
             self.counts.setText(
@@ -2047,10 +2186,14 @@ def launch_gui() -> int:
             QMessageBox.information(
                 self,
                 "Batch summary",
-                f"Completed: {summary.completed}\nNeedsReview: {summary.review}\nErrors: {summary.failed}\n"
-                f"Quality: {summary.quality}\n"
-                f"Cancelled: {'Yes' if summary.cancelled else 'No'}\n"
-                f"Fallback estimated spend: ${summary.fallback_cost:.2f}\n{usage}",
+                f"Images processed: {summary.images_processed}\n"
+                f"Quality: {summary.quality.title()}\n"
+                f"Total API cost: ${summary.fallback_cost:.2f}\n"
+                f"Average cost per image: ${summary.average_cost_per_image:.4f}\n"
+                f"Elapsed time: {summary.elapsed_seconds:.2f} seconds\n"
+                f"{usage}\n"
+                f"Completed: {summary.completed}\nNeedsReview: {summary.review}\n"
+                f"Errors: {summary.failed}",
             )
             self.review_window.refresh_files()
 
