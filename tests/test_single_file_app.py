@@ -237,6 +237,123 @@ def test_advisory_difference_completes_but_hard_verifier_failure_needs_review(
     assert row["needs_review_reason"] == "Severe normalized sharpness loss."
 
 
+def configure_demo(module, tmp_path):
+    module.APP_DIR = tmp_path / "Application"
+    incoming = tmp_path / "Incoming"
+    incoming.mkdir(parents=True)
+    module.configure_demo_runtime_paths(incoming)
+    return incoming, module.APP_DIR / "runtime" / "Demo"
+
+
+def test_demo_mode_never_constructs_client_and_cost_is_zero(
+    tmp_path, monkeypatch, app_module
+):
+    incoming, demo_root = configure_demo(app_module, tmp_path)
+    for name in ("one.jpg", "two.jpg"):
+        textured_image().save(incoming / name, format="JPEG", quality=95)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("OpenAI client/API code must never run in Demo Mode")
+
+    monkeypatch.setattr(app_module, "OpenAI", forbidden)
+    monkeypatch.setattr(app_module, "call_image_editor", forbidden)
+    summary = app_module.process_demo_batch(
+        selected_files=[incoming / "one.jpg"],
+        quality="medium",
+        result_mode="All Pass",
+        delay_seconds=0,
+    )
+
+    assert summary.images_processed == 1
+    assert summary.completed == 1
+    assert summary.api_calls == 0
+    assert summary.fallback_cost == 0
+    assert summary.average_cost_per_image == 0
+    assert (demo_root / "Completed" / "one.jpg").read_bytes() == (
+        incoming / "one.jpg"
+    ).read_bytes()
+    assert not (demo_root / "Completed" / "two.jpg").exists()
+    assert summary.log_path.is_relative_to(demo_root / "Logs")
+    with summary.log_path.open(newline="", encoding="utf-8") as log_file:
+        row = next(csv.DictReader(log_file))
+    assert row["model"] == "DEMO"
+    assert row["api_cost"] == "0.000000"
+    assert row["fallback_estimated_cost"] == "0.000000"
+    assert "DEMO" in row["message"]
+    with sqlite3.connect(demo_root / "Data" / "image_history.sqlite3") as connection:
+        model, cost, message = connection.execute(
+            "SELECT model, fallback_estimated_cost, message FROM image_history"
+        ).fetchone()
+    assert model == "DEMO"
+    assert cost == 0
+    assert "DEMO" in message
+
+
+def test_demo_include_error_routes_pass_review_and_error_only_under_demo(
+    tmp_path, app_module
+):
+    incoming, demo_root = configure_demo(app_module, tmp_path)
+    for name in ("a.jpg", "b.jpg", "c.jpg"):
+        textured_image().save(incoming / name, format="JPEG", quality=95)
+
+    summary = app_module.process_demo_batch(
+        quality="low", result_mode="Include Error", delay_seconds=0
+    )
+
+    assert (summary.completed, summary.review, summary.failed) == (1, 1, 1)
+    assert (demo_root / "Completed" / "a.jpg").exists()
+    assert (demo_root / "NeedsReview" / "b.jpg").exists()
+    assert (demo_root / "Error" / "c_error.txt").exists()
+    assert summary.fallback_cost == 0
+    for path in demo_root.rglob("*"):
+        if path.is_file():
+            assert path.is_relative_to(demo_root)
+
+
+def test_accept_moves_demo_review_output_and_updates_demo_history(tmp_path, app_module):
+    incoming, demo_root = configure_demo(app_module, tmp_path)
+    textured_image().save(incoming / "review.jpg", format="JPEG", quality=95)
+    summary = app_module.process_demo_batch(
+        result_mode="Some Need Review", delay_seconds=0
+    )
+    assert summary.review == 1
+    review_file = demo_root / "NeedsReview" / "review.jpg"
+    assert review_file.exists()
+
+    destination = app_module.accept_review_output("review.jpg")
+    assert destination == demo_root / "Completed" / "review.jpg"
+    assert destination.exists()
+    assert not review_file.exists()
+    with sqlite3.connect(demo_root / "Data" / "image_history.sqlite3") as connection:
+        label = connection.execute(
+            "SELECT implicit_final_label FROM image_history WHERE filename = ?",
+            ("review.jpg",),
+        ).fetchone()[0]
+    assert label == "ACCEPTED"
+
+
+def test_demo_cancel_stops_between_images(tmp_path, app_module):
+    incoming, _ = configure_demo(app_module, tmp_path)
+    for name in ("a.jpg", "b.jpg"):
+        textured_image().save(incoming / name, format="JPEG", quality=95)
+    finished = 0
+
+    def event(kind, payload):
+        nonlocal finished
+        if kind == "finished":
+            finished += 1
+
+    summary = app_module.process_demo_batch(
+        result_mode="All Pass",
+        cancel_requested=lambda: finished >= 1,
+        event=event,
+        delay_seconds=0,
+    )
+    assert summary.cancelled
+    assert summary.completed == 1
+    assert summary.api_calls == 0
+
+
 def test_failed_original_is_retained(tmp_path, app_module):
     configure_tmp(app_module, tmp_path)
     source = app_module.INPUT_DIR / "failed.jpg"

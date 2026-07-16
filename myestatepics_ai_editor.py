@@ -1396,6 +1396,31 @@ def configure_runtime_paths(
     HISTORY_DB = DATA_DIR / "image_history.sqlite3"
 
 
+def demo_runtime_paths() -> tuple[Path, Path, Path, Path, Path]:
+    """Return isolated demo destinations rooted beside the application."""
+    demo_root = APP_DIR / "runtime" / "Demo"
+    return (
+        demo_root / "Completed",
+        demo_root / "NeedsReview",
+        demo_root / "Error",
+        demo_root / "Logs",
+        demo_root / "Data",
+    )
+
+
+def configure_demo_runtime_paths(input_dir: Path) -> None:
+    """Use the real Incoming folder with demo-only output, log, and data folders."""
+    global INPUT_DIR, OUTPUT_DIR, REVIEW_DIR, ERROR_DIR, LOG_DIR, DATA_DIR, HISTORY_DB
+    completed, review, error, logs, data = demo_runtime_paths()
+    INPUT_DIR = Path(input_dir)
+    OUTPUT_DIR = completed
+    REVIEW_DIR = review
+    ERROR_DIR = error
+    LOG_DIR = logs
+    DATA_DIR = data
+    HISTORY_DB = DATA_DIR / "image_history.sqlite3"
+
+
 def pending_images(selected_files: list[Path] | None = None) -> tuple[list[Path], int]:
     INPUT_DIR.mkdir(parents=True, exist_ok=True)
     if selected_files:
@@ -1670,6 +1695,177 @@ def process_batch(
     return summary
 
 
+def append_demo_history(
+    *,
+    run_id: str,
+    filename: str,
+    quality: str,
+    status: str,
+    destination: Path,
+    message: str,
+) -> None:
+    """Write an isolated learning record that is unmistakably a simulation."""
+    implicit_label = {
+        "PASS": "ACCEPTED",
+        "REVIEW": "UNRESOLVED",
+        "FAILED": "FAILED",
+    }[status]
+    with sqlite3.connect(HISTORY_DB) as connection:
+        connection.execute(
+            """
+            INSERT INTO image_history (
+                run_id, processed_at, filename, program_version, prompt_version,
+                model, quality, system_decision, implicit_final_label, destination,
+                fallback_estimated_cost, message
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_id,
+                datetime.now().isoformat(timespec="seconds"),
+                filename,
+                f"{PROGRAM_VERSION}-DEMO",
+                "DEMO",
+                "DEMO",
+                quality,
+                status,
+                implicit_label,
+                str(destination),
+                0.0,
+                f"DEMO — {message}",
+            ),
+        )
+        connection.commit()
+
+
+def process_demo_batch(
+    *,
+    selected_files: list[Path] | None = None,
+    quality: str = "low",
+    result_mode: str = "All Pass",
+    cancel_requested=lambda: False,
+    event=lambda kind, payload: None,
+    delay_seconds: float = 0.15,
+) -> BatchSummary:
+    """Simulate the complete batch workflow without constructing an API client."""
+    if quality not in QUALITY_OPTIONS:
+        raise ValueError(f"Unsupported quality: {quality}")
+    if result_mode not in {"All Pass", "Some Need Review", "Include Error"}:
+        raise ValueError(f"Unsupported demo result mode: {result_mode}")
+
+    global QUALITY
+    QUALITY = quality
+    batch_started = time.perf_counter()
+    for directory in (INPUT_DIR, OUTPUT_DIR, REVIEW_DIR, ERROR_DIR, LOG_DIR, DATA_DIR):
+        directory.mkdir(parents=True, exist_ok=True)
+    initialize_history_db()
+    files, skipped = pending_images(selected_files)
+    summary = BatchSummary(total=len(files), skipped=skipped, quality=quality)
+    if not files:
+        summary.elapsed_seconds = time.perf_counter() - batch_started
+        return summary
+
+    log_path = create_log_file()
+    summary.log_path = log_path
+    run_id = f"DEMO-{log_path.stem}"
+
+    for index, input_file in enumerate(files, 1):
+        if cancel_requested():
+            summary.cancelled = True
+            event("cancelled", input_file.name)
+            break
+        event("started", {"index": index, "total": len(files), "filename": input_file.name})
+        image_started = time.perf_counter()
+        if delay_seconds:
+            time.sleep(delay_seconds)
+
+        if result_mode == "All Pass":
+            status = "PASS"
+        elif result_mode == "Some Need Review":
+            status = "REVIEW" if index % 2 else "PASS"
+        elif index == len(files):
+            status = "FAILED"
+        elif index % 2 == 0:
+            status = "REVIEW"
+        else:
+            status = "PASS"
+
+        elapsed = time.perf_counter() - image_started
+        if status == "PASS":
+            destination = OUTPUT_DIR
+            message = "DEMO simulated pass; original copied as mock processed result."
+            needs_review_reason = ""
+            _atomic_write(destination / input_file.name, input_file.read_bytes())
+            summary.completed += 1
+        elif status == "REVIEW":
+            destination = REVIEW_DIR
+            needs_review_reason = "DEMO simulated NeedsReview result."
+            message = needs_review_reason
+            _atomic_write(destination / input_file.name, input_file.read_bytes())
+            summary.review += 1
+        else:
+            destination = ERROR_DIR
+            needs_review_reason = ""
+            message = "DEMO simulated processing error."
+            ERROR_DIR.mkdir(parents=True, exist_ok=True)
+            (ERROR_DIR / f"{input_file.stem}_error.txt").write_text(
+                f"DEMO — NO API CALLS\nFile: {input_file.name}\nReason: {message}\n",
+                encoding="utf-8",
+            )
+            summary.failed += 1
+
+        row = _log_row(
+            filename=input_file.name,
+            status=status,
+            destination=destination,
+            message=f"DEMO — {message}",
+            processing_time_seconds=elapsed,
+            api_cost=0.0,
+            needs_review_reason=needs_review_reason,
+        )
+        row["model"] = "DEMO"
+        row["prompt_version"] = "DEMO"
+        row["api_cost"] = "0.000000"
+        row["fallback_estimated_cost"] = "0.000000"
+        append_log(log_path, row)
+        append_demo_history(
+            run_id=run_id,
+            filename=input_file.name,
+            quality=quality,
+            status=status,
+            destination=destination,
+            message=message,
+        )
+
+        payload = {
+            "filename": input_file.name,
+            "processing_time_seconds": elapsed,
+            "api_cost": 0.0,
+            "destination": str(destination),
+            "needs_review_reason": needs_review_reason,
+        }
+        if status == "FAILED":
+            payload["error"] = message
+            event("failed", payload)
+        else:
+            payload.update({"status": status, "messages": [message], "metrics": None})
+            event("finished", payload)
+
+    summary.fallback_cost = 0.0
+    summary.elapsed_seconds = time.perf_counter() - batch_started
+    return summary
+
+
+def accept_review_output(filename: str) -> Path:
+    """Move a reviewed output into the active Completed folder and update history."""
+    source = REVIEW_DIR / filename
+    destination = OUTPUT_DIR / filename
+    if destination.exists():
+        raise FileExistsError(f"Completed already contains {filename}.")
+    source.replace(destination)
+    set_review_label(filename, "ACCEPTED")
+    return destination
+
+
 def set_review_label(filename: str, label: str) -> None:
     with sqlite3.connect(HISTORY_DB) as connection:
         connection.execute(
@@ -1688,6 +1884,7 @@ def launch_gui() -> int:
         from PySide6.QtGui import QDesktopServices, QPixmap
         from PySide6.QtWidgets import (
             QApplication,
+            QCheckBox,
             QComboBox,
             QFileDialog,
             QFrame,
@@ -1719,13 +1916,19 @@ def launch_gui() -> int:
             font-family: "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
             font-size: 13px;
         }
-        QMainWindow, QWidget#appRoot { background: #f4f6fa; }
+        QMainWindow, QWidget#appRoot, QScrollArea { background: #f4f6fa; border: none; }
         QLabel#appTitle { font-size: 28px; font-weight: 700; color: #111827; }
         QLabel#appSubtitle { font-size: 13px; color: #667085; }
         QLabel#versionBadge {
             color: #175cd3; background: #eff8ff; border: 1px solid #b2ddff;
             border-radius: 12px; padding: 5px 10px; font-weight: 600;
         }
+        QLabel#demoBanner {
+            color: #7a2e0e; background: #fef0c7; border: 1px solid #fec84b;
+            border-radius: 9px; padding: 9px 14px; font-size: 14px; font-weight: 750;
+        }
+        QCheckBox { color: #344054; font-weight: 650; spacing: 8px; }
+        QCheckBox::indicator { width: 18px; height: 18px; }
         QLabel#pathValue {
             color: #344054; background: #f8fafc; border: 1px solid #e4e7ec;
             border-radius: 7px; padding: 7px 9px;
@@ -1793,22 +1996,40 @@ def launch_gui() -> int:
         event_signal = Signal(str, object)
         complete = Signal(object)
 
-        def __init__(self, client, selected_files, quality):
+        def __init__(
+            self,
+            client,
+            selected_files,
+            quality,
+            demo_mode=False,
+            demo_result_mode="All Pass",
+        ):
             super().__init__()
             self.client = client
             self.selected_files = selected_files
             self.quality = quality
+            self.demo_mode = demo_mode
+            self.demo_result_mode = demo_result_mode
             self.cancelled = False
 
         @Slot()
         def run(self):
-            summary = process_batch(
-                self.client,
-                selected_files=self.selected_files,
-                quality=self.quality,
-                cancel_requested=lambda: self.cancelled,
-                event=lambda kind, payload: self.event_signal.emit(kind, payload),
-            )
+            if self.demo_mode:
+                summary = process_demo_batch(
+                    selected_files=self.selected_files,
+                    quality=self.quality,
+                    result_mode=self.demo_result_mode,
+                    cancel_requested=lambda: self.cancelled,
+                    event=lambda kind, payload: self.event_signal.emit(kind, payload),
+                )
+            else:
+                summary = process_batch(
+                    self.client,
+                    selected_files=self.selected_files,
+                    quality=self.quality,
+                    cancel_requested=lambda: self.cancelled,
+                    event=lambda kind, payload: self.event_signal.emit(kind, payload),
+                )
             self.complete.emit(summary)
 
         @Slot()
@@ -1824,6 +2045,7 @@ def launch_gui() -> int:
             self.resize(1180, 760)
             self.files: list[Path] = []
             self.index = 0
+            self.demo_mode = False
             root = QWidget()
             root.setObjectName("appRoot")
             layout = QVBoxLayout(root)
@@ -1859,6 +2081,7 @@ def launch_gui() -> int:
                     button.setObjectName("dangerButton")
                 elif text == "Reprocess":
                     button.setObjectName("reviewButton")
+                    self.reprocess_button = button
                 button.clicked.connect(handler)
                 buttons.addWidget(button)
             layout.addWidget(self.title)
@@ -1867,6 +2090,12 @@ def launch_gui() -> int:
             layout.addWidget(self.metrics)
             layout.addLayout(buttons)
             self.setCentralWidget(root)
+
+        def set_demo_mode(self, enabled):
+            self.demo_mode = enabled
+            self.reprocess_button.setText(
+                "Reprocess (Simulated)" if enabled else "Reprocess"
+            )
 
         def refresh_files(self):
             self.files = sorted(
@@ -1897,9 +2126,12 @@ def launch_gui() -> int:
                         (processed.name,),
                     ).fetchone()
             self.reason.setText(f"Verifier reason: {record[0] if record else 'Review requested'}")
+            metric_values = (
+                tuple(value or 0 for value in record[1:]) if record else (0, 0, 0)
+            )
             self.metrics.setText(
                 "Sharpness: {:.3f}   Brightness shift: {:.3f}   Chromaticity: {:.4f}".format(
-                    *(record[1:] if record else (0, 0, 0))
+                    *metric_values
                 )
             )
 
@@ -1917,12 +2149,11 @@ def launch_gui() -> int:
             if not self.files:
                 return
             source = self.files[self.index]
-            destination = OUTPUT_DIR / source.name
-            if destination.exists():
-                QMessageBox.warning(self, "Existing file", f"Completed already contains {source.name}.")
+            try:
+                accept_review_output(source.name)
+            except FileExistsError as error:
+                QMessageBox.warning(self, "Existing file", str(error))
                 return
-            source.replace(destination)
-            set_review_label(source.name, "ACCEPTED")
             self.refresh_files()
 
         def reject_image(self):
@@ -1936,8 +2167,12 @@ def launch_gui() -> int:
             filename = self.files[self.index].name
             answer = QMessageBox.question(
                 self,
-                "Paid reprocess",
-                f"Reprocess {filename}? This makes another paid API call.",
+                "Simulated reprocess" if self.demo_mode else "Paid reprocess",
+                (
+                    f"Simulate reprocessing {filename}? No API call will be made."
+                    if self.demo_mode
+                    else f"Reprocess {filename}? This makes another paid API call."
+                ),
             )
             if answer == QMessageBox.Yes:
                 self.files[self.index].unlink()
@@ -1948,7 +2183,7 @@ def launch_gui() -> int:
         def __init__(self):
             super().__init__()
             self.setWindowTitle("MyEstatePics AI Editor")
-            self.resize(1180, 980)
+            self.resize(1180, 1080)
             self.setMinimumSize(980, 760)
             self.thread = None
             self.worker = None
@@ -1959,9 +2194,18 @@ def launch_gui() -> int:
             self.review_window.reprocess.connect(lambda _filename: self.start())
             root = QWidget()
             root.setObjectName("appRoot")
-            layout = QVBoxLayout(root)
+            root_layout = QVBoxLayout(root)
+            root_layout.setContentsMargins(0, 0, 0, 0)
+            content = QWidget()
+            content.setObjectName("appRoot")
+            layout = QVBoxLayout(content)
             layout.setContentsMargins(28, 24, 28, 24)
             layout.setSpacing(14)
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.NoFrame)
+            scroll.setWidget(content)
+            root_layout.addWidget(scroll)
 
             header = QHBoxLayout()
             header_text = QVBoxLayout()
@@ -1978,8 +2222,14 @@ def launch_gui() -> int:
             header.addWidget(version, 0, Qt.AlignTop)
             layout.addLayout(header)
 
+            self.demo_banner = QLabel("DEMO — NO API CALLS")
+            self.demo_banner.setObjectName("demoBanner")
+            self.demo_banner.setAlignment(Qt.AlignCenter)
+            self.demo_banner.setVisible(False)
+            layout.addWidget(self.demo_banner)
+
             workspace_group = QGroupBox("Workspace && Processing")
-            workspace_group.setMinimumHeight(290)
+            workspace_group.setMinimumHeight(380)
             form = QGridLayout(workspace_group)
             form.setHorizontalSpacing(10)
             form.setVerticalSpacing(8)
@@ -2031,6 +2281,17 @@ def launch_gui() -> int:
             form.addWidget(self.api_key_status, 7, 1)
             form.addWidget(self.open_env_button, 7, 2)
             form.addWidget(self.reload_key_button, 7, 3)
+            self.demo_checkbox = QCheckBox("Demo Mode — No API Charges")
+            self.demo_checkbox.toggled.connect(self.on_demo_toggled)
+            self.demo_result = QComboBox()
+            self.demo_result.addItems(
+                ["All Pass", "Some Need Review", "Include Error"]
+            )
+            self.demo_result.setEnabled(False)
+            form.addWidget(QLabel("Mode"), 8, 0)
+            form.addWidget(self.demo_checkbox, 8, 1)
+            form.addWidget(QLabel("Demo Results"), 8, 2)
+            form.addWidget(self.demo_result, 8, 3)
             layout.addWidget(workspace_group)
 
             selection_group = QGroupBox("Image Selection")
@@ -2132,7 +2393,29 @@ def launch_gui() -> int:
             self.analyze()
 
         def apply_paths(self):
-            configure_runtime_paths(*(Path(label.text()) for label in self.path_labels))
+            if self.demo_checkbox.isChecked():
+                configure_demo_runtime_paths(Path(self.path_labels[0].text()))
+            else:
+                configure_runtime_paths(*(Path(label.text()) for label in self.path_labels))
+
+        def on_demo_toggled(self, enabled):
+            self.demo_banner.setVisible(enabled)
+            self.demo_result.setEnabled(enabled)
+            self.open_env_button.setEnabled(not enabled)
+            self.reload_key_button.setEnabled(not enabled)
+            self.model_label.setText("DEMO (no API)" if enabled else MODEL)
+            self.review_window.set_demo_mode(enabled)
+            if enabled:
+                self.api_key_status.setText("Not required — Demo Mode makes no API calls.")
+                self.api_key_status.setStyleSheet("color: #7a2e0e;")
+                self.start_button.setEnabled(not self.processing_active)
+                self.log.appendPlainText("DEMO — NO API CALLS enabled.")
+            else:
+                self.reload_api_key(show_error=False)
+                self.log.appendPlainText("Demo Mode disabled; real processing restored.")
+            self.apply_paths()
+            self.refresh_selection_table()
+            self.analyze()
 
         def choose_folder(self, index):
             chosen = QFileDialog.getExistingDirectory(self, "Choose folder", self.path_labels[index].text())
@@ -2229,6 +2512,13 @@ def launch_gui() -> int:
 
         def reload_api_key(self, checked=False, show_error=True):
             del checked
+            if hasattr(self, "demo_checkbox") and self.demo_checkbox.isChecked():
+                self.api_key = None
+                self.api_key_status.setText(
+                    "Not required — Demo Mode makes no API calls."
+                )
+                self.start_button.setEnabled(not self.processing_active)
+                return True
             self.api_key, message = load_project_api_key()
             valid = self.api_key is not None
             self.api_key_status.setText(message)
@@ -2245,7 +2535,11 @@ def launch_gui() -> int:
             return valid
 
         def open_folder(self, index):
-            path = Path(self.path_labels[index].text())
+            self.apply_paths()
+            if self.demo_checkbox.isChecked():
+                path = (INPUT_DIR, OUTPUT_DIR, REVIEW_DIR, ERROR_DIR, LOG_DIR)[index]
+            else:
+                path = Path(self.path_labels[index].text())
             path.mkdir(parents=True, exist_ok=True)
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
@@ -2254,9 +2548,12 @@ def launch_gui() -> int:
             files, skipped = pending_images(self.selected_or_all())
             quality = self.quality.currentText().lower()
             self.image_count.setText(f"Images to process: {len(files)} (existing skipped: {skipped})")
-            self.cost.setText(
-                f"Estimated cost: ${len(files) * estimated_cost_per_image(quality):.2f}"
+            estimated_cost = (
+                0.0
+                if self.demo_checkbox.isChecked()
+                else len(files) * estimated_cost_per_image(quality)
             )
+            self.cost.setText(f"Estimated cost: ${estimated_cost:.2f}")
             self.progress.setRange(0, max(1, len(files)))
             self.progress.setValue(0)
             self.refresh_selection_table()
@@ -2266,6 +2563,7 @@ def launch_gui() -> int:
             selected = self.selected_or_all()
             files, skipped = pending_images(selected)
             quality = self.quality.currentText().lower()
+            demo_mode = self.demo_checkbox.isChecked()
             if not files:
                 QMessageBox.information(self, "Nothing to process", "No pending supported images were found.")
                 return
@@ -2277,21 +2575,36 @@ def launch_gui() -> int:
                 )
             answer = QMessageBox.question(
                 self,
-                "Confirm paid processing",
-                f"Process {len(files)} image(s) at {quality} quality? "
-                f"Estimated cost: ${len(files) * estimated_cost_per_image(quality):.2f}.",
+                "Start Demo" if demo_mode else "Confirm paid processing",
+                (
+                    f"Simulate processing {len(files)} image(s) at {quality} quality? "
+                    "No API calls will be made and cost is $0.00."
+                    if demo_mode
+                    else f"Process {len(files)} image(s) at {quality} quality? "
+                    f"Estimated cost: ${len(files) * estimated_cost_per_image(quality):.2f}."
+                ),
             )
             if answer != QMessageBox.Yes:
                 return
-            if not self.reload_api_key(show_error=True):
-                return
-            api_key = self.api_key
-            if api_key is None:
-                return
-            client = OpenAI(api_key=api_key)
+            client = None
+            if not demo_mode:
+                if not self.reload_api_key(show_error=True):
+                    return
+                api_key = self.api_key
+                if api_key is None:
+                    return
+                client = OpenAI(api_key=api_key)
             self.thread = QThread(self)
-            self.log.appendPlainText(f"Starting batch with quality: {quality}")
-            self.worker = Worker(client, selected, quality)
+            self.log.appendPlainText(
+                f"Starting {'DEMO ' if demo_mode else ''}batch with quality: {quality}"
+            )
+            self.worker = Worker(
+                client,
+                selected,
+                quality,
+                demo_mode=demo_mode,
+                demo_result_mode=self.demo_result.currentText(),
+            )
             self.worker.moveToThread(self.thread)
             self.thread.started.connect(self.worker.run)
             self.worker.event_signal.connect(self.on_event)
@@ -2341,7 +2654,9 @@ def launch_gui() -> int:
 
         def on_complete(self, summary):
             self.processing_active = False
-            self.start_button.setEnabled(self.api_key is not None)
+            self.start_button.setEnabled(
+                self.demo_checkbox.isChecked() or self.api_key is not None
+            )
             self.cancel_button.setEnabled(False)
             self.current.setText("Current: —")
             self.counts.setText(
@@ -2354,7 +2669,7 @@ def launch_gui() -> int:
             )
             QMessageBox.information(
                 self,
-                "Batch summary",
+                "Demo Batch Summary" if self.demo_checkbox.isChecked() else "Batch summary",
                 f"Images processed: {summary.images_processed}\n"
                 f"Quality: {summary.quality.title()}\n"
                 f"Total API cost: ${summary.fallback_cost:.2f}\n"

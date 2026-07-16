@@ -10,6 +10,7 @@ runtime/NeedsReview/*
 runtime/Error/*
 runtime/Logs/*
 runtime/Data/*
+runtime/Demo/
 !runtime/Incoming/.gitkeep
 !runtime/Completed/.gitkeep
 !runtime/NeedsReview/.gitkeep
