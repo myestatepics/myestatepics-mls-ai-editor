@@ -1690,8 +1690,10 @@ def launch_gui() -> int:
             QApplication,
             QComboBox,
             QFileDialog,
+            QFrame,
             QFormLayout,
             QGridLayout,
+            QGroupBox,
             QHBoxLayout,
             QLabel,
             QMainWindow,
@@ -1710,6 +1712,82 @@ def launch_gui() -> int:
         raise RuntimeError(
             "PySide6 is required. Install dependencies with: pip install -r requirements.txt"
         ) from error
+
+    app_stylesheet = """
+        QWidget {
+            color: #172033;
+            font-family: "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+            font-size: 13px;
+        }
+        QMainWindow, QWidget#appRoot { background: #f4f6fa; }
+        QLabel#appTitle { font-size: 28px; font-weight: 700; color: #111827; }
+        QLabel#appSubtitle { font-size: 13px; color: #667085; }
+        QLabel#versionBadge {
+            color: #175cd3; background: #eff8ff; border: 1px solid #b2ddff;
+            border-radius: 12px; padding: 5px 10px; font-weight: 600;
+        }
+        QLabel#pathValue {
+            color: #344054; background: #f8fafc; border: 1px solid #e4e7ec;
+            border-radius: 7px; padding: 7px 9px;
+        }
+        QLabel#hintText { color: #667085; font-size: 12px; }
+        QGroupBox {
+            background: white; border: 1px solid #e4e7ec; border-radius: 12px;
+            margin-top: 12px; padding: 16px 14px 14px 14px;
+            font-size: 14px; font-weight: 650; color: #1d2939;
+        }
+        QGroupBox::title { subcontrol-origin: margin; left: 14px; padding: 0 6px; }
+        QPushButton {
+            background: white; border: 1px solid #d0d5dd; border-radius: 8px;
+            padding: 7px 12px; color: #344054; font-weight: 600;
+        }
+        QPushButton:hover { background: #f9fafb; border-color: #98a2b3; }
+        QPushButton:pressed { background: #f2f4f7; }
+        QPushButton:disabled { color: #98a2b3; background: #f2f4f7; border-color: #eaecf0; }
+        QPushButton#primaryButton {
+            color: white; background: #2563eb; border-color: #2563eb;
+            padding: 9px 18px;
+        }
+        QPushButton#primaryButton:hover { background: #1d4ed8; border-color: #1d4ed8; }
+        QPushButton#dangerButton { color: #b42318; background: #fff; border-color: #fda29b; }
+        QPushButton#dangerButton:hover { background: #fff5f4; }
+        QPushButton#reviewButton { color: #7a2e0e; background: #fffaeb; border-color: #fedf89; }
+        QComboBox {
+            background: white; border: 1px solid #d0d5dd; border-radius: 8px;
+            padding: 7px 28px 7px 10px; min-width: 105px;
+        }
+        QComboBox:focus { border: 2px solid #84adff; }
+        QFrame#metricCard {
+            background: white; border: 1px solid #e4e7ec; border-radius: 11px;
+        }
+        QLabel#metricCaption { color: #667085; font-size: 11px; font-weight: 650; }
+        QLabel#metricValue { color: #101828; font-size: 14px; font-weight: 650; }
+        QTableWidget {
+            background: white; alternate-background-color: #f9fafb; border: 1px solid #e4e7ec;
+            border-radius: 8px; gridline-color: #eaecf0; selection-background-color: #eff8ff;
+            selection-color: #175cd3;
+        }
+        QHeaderView::section {
+            background: #f9fafb; color: #475467; border: none; border-bottom: 1px solid #e4e7ec;
+            padding: 8px; font-weight: 650;
+        }
+        QPlainTextEdit {
+            background: #101828; color: #d0d5dd; border: 1px solid #344054;
+            border-radius: 9px; padding: 10px; font-family: Menlo, monospace; font-size: 11px;
+        }
+        QProgressBar {
+            background: #eaecf0; border: none; border-radius: 5px; height: 10px; text-align: center;
+        }
+        QProgressBar::chunk { background: #2563eb; border-radius: 5px; }
+        QLabel#imageCanvas {
+            background: #101828; color: #98a2b3; border: 1px solid #344054;
+            border-radius: 10px;
+        }
+        QLabel#reviewReason {
+            color: #7a2e0e; background: #fffaeb; border: 1px solid #fedf89;
+            border-radius: 8px; padding: 10px;
+        }
+    """
 
     class Worker(QObject):
         event_signal = Signal(str, object)
@@ -1743,19 +1821,26 @@ def launch_gui() -> int:
         def __init__(self, parent=None):
             super().__init__(parent)
             self.setWindowTitle("Review — MyEstatePics AI Editor")
-            self.resize(1100, 700)
+            self.resize(1180, 760)
             self.files: list[Path] = []
             self.index = 0
             root = QWidget()
+            root.setObjectName("appRoot")
             layout = QVBoxLayout(root)
+            layout.setContentsMargins(24, 22, 24, 22)
+            layout.setSpacing(14)
             self.title = QLabel()
+            self.title.setObjectName("appTitle")
             self.reason = QLabel()
+            self.reason.setObjectName("reviewReason")
             self.reason.setWordWrap(True)
             self.metrics = QLabel()
+            self.metrics.setObjectName("appSubtitle")
             images = QSplitter()
             self.original = QLabel("Original")
             self.processed = QLabel("Processed")
             for label in (self.original, self.processed):
+                label.setObjectName("imageCanvas")
                 label.setAlignment(Qt.AlignCenter)
                 label.setMinimumSize(400, 400)
                 images.addWidget(label)
@@ -1768,6 +1853,12 @@ def launch_gui() -> int:
                 ("Reprocess", self.reprocess_image),
             ):
                 button = QPushButton(text)
+                if text == "Accept":
+                    button.setObjectName("primaryButton")
+                elif text == "Reject":
+                    button.setObjectName("dangerButton")
+                elif text == "Reprocess":
+                    button.setObjectName("reviewButton")
                 button.clicked.connect(handler)
                 buttons.addWidget(button)
             layout.addWidget(self.title)
@@ -1857,7 +1948,8 @@ def launch_gui() -> int:
         def __init__(self):
             super().__init__()
             self.setWindowTitle("MyEstatePics AI Editor")
-            self.resize(980, 760)
+            self.resize(1180, 980)
+            self.setMinimumSize(980, 760)
             self.thread = None
             self.worker = None
             self.processing_active = False
@@ -1866,18 +1958,46 @@ def launch_gui() -> int:
             self.review_window = ReviewWindow(self)
             self.review_window.reprocess.connect(lambda _filename: self.start())
             root = QWidget()
+            root.setObjectName("appRoot")
             layout = QVBoxLayout(root)
-            form = QGridLayout()
+            layout.setContentsMargins(28, 24, 28, 24)
+            layout.setSpacing(14)
+
+            header = QHBoxLayout()
+            header_text = QVBoxLayout()
+            header_text.setSpacing(2)
+            title = QLabel("MyEstatePics AI Editor")
+            title.setObjectName("appTitle")
+            subtitle = QLabel("Professional MLS photo enhancement • originals always stay untouched")
+            subtitle.setObjectName("appSubtitle")
+            header_text.addWidget(title)
+            header_text.addWidget(subtitle)
+            version = QLabel(f"Production v{PROGRAM_VERSION}")
+            version.setObjectName("versionBadge")
+            header.addLayout(header_text, 1)
+            header.addWidget(version, 0, Qt.AlignTop)
+            layout.addLayout(header)
+
+            workspace_group = QGroupBox("Workspace && Processing")
+            workspace_group.setMinimumHeight(290)
+            form = QGridLayout(workspace_group)
+            form.setHorizontalSpacing(10)
+            form.setVerticalSpacing(8)
+            form.setColumnStretch(1, 1)
             defaults = [INPUT_DIR, OUTPUT_DIR, REVIEW_DIR, ERROR_DIR, LOG_DIR]
             labels = ["Incoming Folder", "Completed", "NeedsReview", "Error", "Logs"]
             self.path_labels = []
             for row, (name, path) in enumerate(zip(labels, defaults)):
                 display_row = row if row == 0 else row + 1
                 label = QLabel(str(path))
+                label.setObjectName("pathValue")
+                label.setMinimumHeight(30)
                 label.setTextInteractionFlags(Qt.TextSelectableByMouse)
                 choose = QPushButton("Choose Folder…" if row == 0 else "Choose…")
+                choose.setMinimumHeight(30)
                 choose.clicked.connect(lambda checked=False, i=row: self.choose_folder(i))
                 open_button = QPushButton("Open in Finder")
+                open_button.setMinimumHeight(30)
                 open_button.clicked.connect(lambda checked=False, i=row: self.open_folder(i))
                 form.addWidget(QLabel(name), display_row, 0)
                 form.addWidget(label, display_row, 1)
@@ -1888,10 +2008,12 @@ def launch_gui() -> int:
                 "Select specific images, or leave the selection empty to process all "
                 "supported images in the Incoming folder."
             )
+            selection_help.setObjectName("hintText")
             selection_help.setWordWrap(True)
             form.addWidget(selection_help, 1, 1, 1, 3)
             self.model_label = QLabel(MODEL)
             self.quality = QComboBox()
+            self.quality.setMinimumHeight(30)
             self.quality.addItems(["Low", "Medium"])
             self.quality.setCurrentText("Low")
             form.addWidget(QLabel("Model"), 6, 0)
@@ -1900,14 +2022,20 @@ def launch_gui() -> int:
             form.addWidget(self.quality, 6, 3)
             self.api_key_status = QLabel()
             self.open_env_button = QPushButton("Open .env")
+            self.open_env_button.setMinimumHeight(30)
             self.open_env_button.clicked.connect(self.open_env)
             self.reload_key_button = QPushButton("Reload API Key")
+            self.reload_key_button.setMinimumHeight(30)
             self.reload_key_button.clicked.connect(self.reload_api_key)
             form.addWidget(QLabel("API Key"), 7, 0)
             form.addWidget(self.api_key_status, 7, 1)
             form.addWidget(self.open_env_button, 7, 2)
             form.addWidget(self.reload_key_button, 7, 3)
-            layout.addLayout(form)
+            layout.addWidget(workspace_group)
+
+            selection_group = QGroupBox("Image Selection")
+            selection_layout = QVBoxLayout(selection_group)
+            selection_layout.setSpacing(9)
             selection_actions = QHBoxLayout()
             for text, handler in (
                 ("Select Images…", self.select_images),
@@ -1915,30 +2043,58 @@ def launch_gui() -> int:
                 ("Clear Selection", self.clear_selection),
             ):
                 button = QPushButton(text)
+                if text == "Select Images…":
+                    button.setObjectName("primaryButton")
                 button.clicked.connect(handler)
                 selection_actions.addWidget(button)
             selection_actions.addStretch(1)
-            layout.addLayout(selection_actions)
+            selection_layout.addLayout(selection_actions)
             self.selected_table = QTableWidget(0, 3)
             self.selected_table.setHorizontalHeaderLabels(
                 ["Filename", "File Size", "Selection Status"]
             )
             self.selected_table.horizontalHeader().setStretchLastSection(True)
-            self.selected_table.setMaximumHeight(170)
-            layout.addWidget(self.selected_table)
-            stats = QHBoxLayout()
+            self.selected_table.setAlternatingRowColors(True)
+            self.selected_table.setShowGrid(False)
+            self.selected_table.setMinimumHeight(125)
+            self.selected_table.setMaximumHeight(155)
+            self.selected_table.setColumnWidth(0, 320)
+            self.selected_table.setColumnWidth(1, 120)
+            selection_layout.addWidget(self.selected_table)
+            layout.addWidget(selection_group)
+
+            def metric_card(caption, value_label):
+                card = QFrame()
+                card.setObjectName("metricCard")
+                card_layout = QVBoxLayout(card)
+                card_layout.setContentsMargins(13, 10, 13, 10)
+                card_layout.setSpacing(3)
+                caption_label = QLabel(caption.upper())
+                caption_label.setObjectName("metricCaption")
+                value_label.setObjectName("metricValue")
+                value_label.setWordWrap(True)
+                card_layout.addWidget(caption_label)
+                card_layout.addWidget(value_label)
+                return card
+
+            stats = QGridLayout()
+            stats.setHorizontalSpacing(10)
             self.image_count = QLabel("Images: 0")
             self.cost = QLabel("Estimated cost: $0.00")
             self.current = QLabel("Current: —")
-            stats.addWidget(self.image_count)
-            stats.addWidget(self.cost)
-            stats.addWidget(self.current, 1)
+            self.counts = QLabel("Completed: 0   NeedsReview: 0   Error: 0")
+            stats.addWidget(metric_card("Batch", self.image_count), 0, 0)
+            stats.addWidget(metric_card("Estimated cost", self.cost), 0, 1)
+            stats.addWidget(metric_card("Current image", self.current), 0, 2)
+            stats.addWidget(metric_card("Results", self.counts), 0, 3)
+            for column in range(4):
+                stats.setColumnStretch(column, 1)
             layout.addLayout(stats)
             self.progress = QProgressBar()
+            self.progress.setTextVisible(False)
             layout.addWidget(self.progress)
-            self.counts = QLabel("Completed: 0   NeedsReview: 0   Error: 0")
-            layout.addWidget(self.counts)
             actions = QHBoxLayout()
+            actions.setSpacing(9)
             for text, handler in (
                 ("Analyze", self.analyze),
                 ("Start Processing", self.start),
@@ -1946,17 +2102,30 @@ def launch_gui() -> int:
                 ("Review Images", self.open_review),
             ):
                 button = QPushButton(text)
+                if text == "Start Processing":
+                    button.setObjectName("primaryButton")
+                elif text == "Cancel":
+                    button.setObjectName("dangerButton")
+                elif text == "Review Images":
+                    button.setObjectName("reviewButton")
                 button.clicked.connect(handler)
                 actions.addWidget(button)
                 if text == "Start Processing":
                     self.start_button = button
                 elif text == "Cancel":
                     self.cancel_button = button
+            actions.addStretch(1)
             self.cancel_button.setEnabled(False)
             layout.addLayout(actions)
+
+            activity_group = QGroupBox("Processing Activity")
+            activity_layout = QVBoxLayout(activity_group)
             self.log = QPlainTextEdit()
             self.log.setReadOnly(True)
-            layout.addWidget(self.log, 1)
+            self.log.setPlaceholderText("Processing updates and per-image results will appear here.")
+            self.log.setMinimumHeight(120)
+            activity_layout.addWidget(self.log)
+            layout.addWidget(activity_group, 1)
             self.setCentralWidget(root)
             self.quality.currentTextChanged.connect(self.on_quality_changed)
             self.reload_api_key(show_error=False)
@@ -2205,6 +2374,8 @@ def launch_gui() -> int:
 
     app = QApplication.instance() or QApplication([])
     app.setApplicationName("MyEstatePics AI Editor")
+    app.setStyle("Fusion")
+    app.setStyleSheet(app_stylesheet)
     window = MainWindow()
     window.show()
     return app.exec()
