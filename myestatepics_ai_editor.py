@@ -1421,6 +1421,28 @@ def configure_demo_runtime_paths(input_dir: Path) -> None:
     HISTORY_DB = DATA_DIR / "image_history.sqlite3"
 
 
+def existing_output_destination(filename: str) -> str | None:
+    """Return the current output folder containing this filename, without history."""
+    for directory, destination in (
+        (OUTPUT_DIR, "Completed"),
+        (REVIEW_DIR, "NeedsReview"),
+        (ERROR_DIR, "Error"),
+    ):
+        if (directory / filename).is_file():
+            return destination
+    return None
+
+
+def selection_status(input_file: Path) -> str:
+    """Build a fresh GUI status from current filesystem state only."""
+    if not input_file.is_file():
+        return "Missing"
+    destination = existing_output_destination(input_file.name)
+    if destination:
+        return f"Already exists in {destination}"
+    return "Selected — ready"
+
+
 def pending_images(selected_files: list[Path] | None = None) -> tuple[list[Path], int]:
     INPUT_DIR.mkdir(parents=True, exist_ok=True)
     if selected_files:
@@ -1443,8 +1465,7 @@ def pending_images(selected_files: list[Path] | None = None) -> tuple[list[Path]
     pending = [
         file
         for file in candidates
-        if not (OUTPUT_DIR / file.name).exists()
-        and not (REVIEW_DIR / file.name).exists()
+        if existing_output_destination(file.name) is None
     ]
     return pending, len(candidates) - len(pending)
 
@@ -2477,15 +2498,9 @@ def launch_gui() -> int:
             for row, path in enumerate(files):
                 if not path.exists():
                     size = "—"
-                    status = "Missing"
                 else:
                     size = f"{path.stat().st_size / 1_000_000:.2f} MB"
-                    if (OUTPUT_DIR / path.name).exists():
-                        status = "Skipped — already completed"
-                    elif (REVIEW_DIR / path.name).exists():
-                        status = "Skipped — already reviewed"
-                    else:
-                        status = "Selected — ready"
+                status = selection_status(path)
                 for column, value in enumerate((path.name, size, status)):
                     self.selected_table.setItem(row, column, QTableWidgetItem(value))
 
@@ -2571,7 +2586,8 @@ def launch_gui() -> int:
                 QMessageBox.information(
                     self,
                     "Existing outputs",
-                    f"{skipped} image(s) already exist in Completed or NeedsReview and will not be overwritten.",
+                    f"{skipped} image(s) already exist in Completed, NeedsReview, or Error "
+                    "and will not be overwritten.",
                 )
             answer = QMessageBox.question(
                 self,
@@ -2680,6 +2696,7 @@ def launch_gui() -> int:
                 f"Errors: {summary.failed}",
             )
             self.review_window.refresh_files()
+            self.analyze()
 
         def open_review(self):
             self.apply_paths()

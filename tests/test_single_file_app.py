@@ -199,6 +199,117 @@ def test_selected_file_processing_and_empty_selection_processes_all(tmp_path, ap
     assert calls == ["one.jpg", "three.jpg"]
 
 
+@pytest.mark.parametrize(
+    ("directory_name", "expected_status"),
+    [
+        ("OUTPUT_DIR", "Already exists in Completed"),
+        ("REVIEW_DIR", "Already exists in NeedsReview"),
+        ("ERROR_DIR", "Already exists in Error"),
+    ],
+)
+def test_current_output_file_skips_source_by_actual_destination(
+    tmp_path, app_module, directory_name, expected_status
+):
+    configure_tmp(app_module, tmp_path)
+    source = app_module.INPUT_DIR / "same-name.jpg"
+    textured_image().save(source, format="JPEG", quality=95)
+    destination = getattr(app_module, directory_name) / source.name
+    destination.write_bytes(source.read_bytes())
+
+    pending, skipped = app_module.pending_images([source])
+    assert pending == []
+    assert skipped == 1
+    assert app_module.selection_status(source) == expected_status
+
+
+def test_deleted_output_immediately_makes_source_pending(tmp_path, app_module):
+    configure_tmp(app_module, tmp_path)
+    source = app_module.INPUT_DIR / "retry.jpg"
+    textured_image().save(source, format="JPEG", quality=95)
+    output = app_module.OUTPUT_DIR / source.name
+    output.write_bytes(source.read_bytes())
+    assert app_module.pending_images([source]) == ([], 1)
+    assert app_module.selection_status(source) == "Already exists in Completed"
+
+    output.unlink()
+
+    pending, skipped = app_module.pending_images([source])
+    assert pending == [source.resolve()]
+    assert skipped == 0
+    assert app_module.selection_status(source) == "Selected — ready"
+
+
+def test_sqlite_history_alone_never_blocks_reprocessing(tmp_path, app_module):
+    configure_tmp(app_module, tmp_path)
+    source = app_module.INPUT_DIR / "history-only.jpg"
+    textured_image().save(source, format="JPEG", quality=95)
+    app_module.initialize_history_db()
+    with sqlite3.connect(app_module.HISTORY_DB) as connection:
+        connection.execute(
+            """INSERT INTO image_history (
+                run_id, processed_at, filename, program_version, prompt_version,
+                model, quality, system_decision, implicit_final_label, destination
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                "old-run",
+                "yesterday",
+                source.name,
+                "1.6",
+                "1.6",
+                "gpt-image-2",
+                "low",
+                "PASS",
+                "ACCEPTED",
+                str(app_module.OUTPUT_DIR),
+            ),
+        )
+        connection.commit()
+
+    assert app_module.pending_images([source]) == ([source.resolve()], 0)
+
+
+def test_csv_history_alone_never_blocks_reprocessing(tmp_path, app_module):
+    configure_tmp(app_module, tmp_path)
+    source = app_module.INPUT_DIR / "csv-only.jpg"
+    textured_image().save(source, format="JPEG", quality=95)
+    app_module.LOG_DIR.mkdir(parents=True, exist_ok=True)
+    (app_module.LOG_DIR / "old_run.csv").write_text(
+        f"filename,status,destination\n{source.name},PASS,{app_module.OUTPUT_DIR}\n",
+        encoding="utf-8",
+    )
+
+    assert app_module.pending_images([source]) == ([source.resolve()], 0)
+
+
+def test_real_and_demo_output_skip_states_are_isolated(tmp_path, app_module):
+    configure_tmp(app_module, tmp_path)
+    source = app_module.INPUT_DIR / "isolated.jpg"
+    textured_image().save(source, format="JPEG", quality=95)
+    real_paths = (
+        app_module.INPUT_DIR,
+        app_module.OUTPUT_DIR,
+        app_module.REVIEW_DIR,
+        app_module.ERROR_DIR,
+        app_module.LOG_DIR,
+    )
+    real_output = app_module.OUTPUT_DIR / source.name
+    real_output.write_bytes(source.read_bytes())
+    assert app_module.pending_images([source]) == ([], 1)
+
+    app_module.APP_DIR = tmp_path / "Application"
+    app_module.configure_demo_runtime_paths(source.parent)
+    assert app_module.pending_images([source]) == ([source.resolve()], 0)
+    demo_output = app_module.OUTPUT_DIR / source.name
+    demo_output.parent.mkdir(parents=True, exist_ok=True)
+    demo_output.write_bytes(source.read_bytes())
+    assert app_module.pending_images([source]) == ([], 1)
+
+    app_module.configure_runtime_paths(*real_paths)
+    real_output.unlink()
+    assert app_module.pending_images([source]) == ([source.resolve()], 0)
+    assert demo_output.exists()
+
+
 def test_advisory_difference_completes_but_hard_verifier_failure_needs_review(
     tmp_path, monkeypatch, app_module
 ):
