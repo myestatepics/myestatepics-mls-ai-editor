@@ -2502,6 +2502,8 @@ def launch_gui() -> int:
             self.selected_files: set[Path] = set()
             self.available_files: list[Path] = []
             self.updating_table = False
+            self.selection_events_enabled = False
+            self.selection_generation = 0
             self.folder_configuration_valid = True
             self.settings = QSettings(
                 str(USER_DATA_DIR / "preferences.ini"), QSettings.IniFormat
@@ -2734,10 +2736,6 @@ def launch_gui() -> int:
                 self.resize(saved_size)
             if load_boolean_setting(self.settings, "ui/demo_mode", False):
                 self.demo_checkbox.setChecked(True)
-            # Run once after Qt has delivered startup widget events. This prevents
-            # delayed table notifications from overriding the required Select All
-            # default for a restored Incoming folder.
-            QTimer.singleShot(0, self.rescan_folder)
 
         def closeEvent(self, event):
             self.settings.setValue("ui/window_size", self.size())
@@ -2785,6 +2783,9 @@ def launch_gui() -> int:
 
         def rescan_folder(self, checked=False):
             del checked
+            self.selection_events_enabled = False
+            self.selection_generation += 1
+            generation = self.selection_generation
             self.apply_paths()
             self.available_files, self.selected_files = scan_and_select_all(INPUT_DIR)
             self.refresh_selection_table()
@@ -2792,6 +2793,27 @@ def launch_gui() -> int:
             logging.info(
                 "Incoming scan: folder=%s found=%d selected=%d",
                 INPUT_DIR,
+                len(self.available_files),
+                len(self.selected_files),
+            )
+            QTimer.singleShot(
+                250,
+                lambda current_generation=generation: self.finish_default_selection(
+                    current_generation
+                ),
+            )
+
+        def finish_default_selection(self, generation):
+            if generation != self.selection_generation:
+                return
+            # Assert the default after Qt has finished delivering table setup
+            # events, then permit genuine user check/uncheck changes.
+            self.selected_files = set(self.available_files)
+            self.refresh_selection_table()
+            self.update_job_summary()
+            self.selection_events_enabled = True
+            logging.info(
+                "Incoming selection ready: found=%d selected=%d",
                 len(self.available_files),
                 len(self.selected_files),
             )
@@ -2869,7 +2891,11 @@ def launch_gui() -> int:
                 self.updating_table = False
 
         def on_table_item_changed(self, item):
-            if self.updating_table or item.column() != 0:
+            if (
+                self.updating_table
+                or not self.selection_events_enabled
+                or item.column() != 0
+            ):
                 return
             path_value = item.data(Qt.UserRole)
             if not path_value:
@@ -2878,6 +2904,15 @@ def launch_gui() -> int:
             self.selected_files = update_checked_selection(
                 self.selected_files, path, item.checkState() == Qt.Checked
             )
+            status_item = self.selected_table.item(item.row(), 4)
+            if status_item is not None:
+                destination_status = selection_status(path)
+                status_item.setText(
+                    destination_status
+                    if item.checkState() == Qt.Checked
+                    or destination_status.startswith("Already")
+                    else "Not selected"
+                )
             self.update_job_summary()
 
         def selected_or_all(self) -> list[Path]:
