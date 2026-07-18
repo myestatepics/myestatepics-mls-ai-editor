@@ -156,6 +156,24 @@ def test_folder_scan_auto_loads_supported_images(tmp_path, app_module):
     assert set(found) == set(found)  # the GUI's initial checked selection
 
 
+def test_restored_incoming_folder_selects_every_supported_image_by_default(
+    tmp_path, app_module
+):
+    incoming = tmp_path / "Incoming"
+    incoming.mkdir()
+    for index in range(3):
+        textured_image().save(incoming / f"image-{index}.jpg", format="JPEG")
+    (incoming / "ignore.txt").write_text("not an image", encoding="utf-8")
+
+    available, selected = app_module.scan_and_select_all(incoming)
+
+    assert len(available) == 3
+    assert selected == set(available)
+    assert app_module.selected_batch_cost(selected, "low", False) == (
+        3 * app_module.LOW_ESTIMATED_COST_PER_IMAGE
+    )
+
+
 def test_checked_selection_drives_count_and_cost(app_module):
     files = [Path("one.jpg"), Path("two.jpg")]
     low = app_module.selected_batch_cost(files[:1], "low", False)

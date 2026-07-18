@@ -1466,6 +1466,12 @@ def scan_supported_images(input_dir: Path) -> list[Path]:
     )
 
 
+def scan_and_select_all(input_dir: Path) -> tuple[list[Path], set[Path]]:
+    """Scan Incoming and return the deterministic default selection."""
+    available_files = scan_supported_images(input_dir)
+    return available_files, set(available_files)
+
+
 def selected_batch_cost(
     selected_files: list[Path] | set[Path],
     quality: str,
@@ -2127,7 +2133,16 @@ def set_latest_history_label(filename: str, label: str) -> None:
 
 def launch_gui() -> int:
     try:
-        from PySide6.QtCore import QObject, QSettings, QThread, Qt, Signal, Slot, QUrl
+        from PySide6.QtCore import (
+            QObject,
+            QSettings,
+            QSignalBlocker,
+            QThread,
+            Qt,
+            Signal,
+            Slot,
+            QUrl,
+        )
         from PySide6.QtGui import QDesktopServices, QPixmap
         from PySide6.QtWidgets import (
             QApplication,
@@ -2766,8 +2781,7 @@ def launch_gui() -> int:
         def rescan_folder(self, checked=False):
             del checked
             self.apply_paths()
-            self.available_files = scan_supported_images(INPUT_DIR)
-            self.selected_files = set(self.available_files)
+            self.available_files, self.selected_files = scan_and_select_all(INPUT_DIR)
             self.refresh_selection_table()
             self.update_job_summary()
 
@@ -2812,32 +2826,36 @@ def launch_gui() -> int:
 
         def refresh_selection_table(self):
             self.updating_table = True
-            files = self.available_files
-            self.selected_table.setRowCount(len(files))
-            for row, path in enumerate(files):
-                size = f"{path.stat().st_size / 1_000_000:.2f} MB"
-                try:
-                    with Image.open(path) as image:
-                        dimensions = f"{image.width} × {image.height}"
-                except (OSError, ValueError):
-                    dimensions = "Unreadable"
-                status = selection_status(path)
-                if path not in self.selected_files and not status.startswith("Already"):
-                    status = "Not selected"
-                checkbox = QTableWidgetItem()
-                checkbox.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
-                checkbox.setCheckState(
-                    Qt.Checked if path in self.selected_files else Qt.Unchecked
-                )
-                checkbox.setData(Qt.UserRole, str(path))
-                self.selected_table.setItem(row, 0, checkbox)
-                for column, value in enumerate(
-                    (path.name, size, dimensions, status), start=1
-                ):
-                    item = QTableWidgetItem(value)
-                    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-                    self.selected_table.setItem(row, column, item)
-            self.updating_table = False
+            signal_blocker = QSignalBlocker(self.selected_table)
+            try:
+                files = self.available_files
+                self.selected_table.setRowCount(len(files))
+                for row, path in enumerate(files):
+                    size = f"{path.stat().st_size / 1_000_000:.2f} MB"
+                    try:
+                        with Image.open(path) as image:
+                            dimensions = f"{image.width} × {image.height}"
+                    except (OSError, ValueError):
+                        dimensions = "Unreadable"
+                    status = selection_status(path)
+                    if path not in self.selected_files and not status.startswith("Already"):
+                        status = "Not selected"
+                    checkbox = QTableWidgetItem()
+                    checkbox.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
+                    checkbox.setData(Qt.UserRole, str(path))
+                    checkbox.setCheckState(
+                        Qt.Checked if path in self.selected_files else Qt.Unchecked
+                    )
+                    self.selected_table.setItem(row, 0, checkbox)
+                    for column, value in enumerate(
+                        (path.name, size, dimensions, status), start=1
+                    ):
+                        item = QTableWidgetItem(value)
+                        item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                        self.selected_table.setItem(row, column, item)
+            finally:
+                del signal_blocker
+                self.updating_table = False
 
         def on_table_item_changed(self, item):
             if self.updating_table or item.column() != 0:
