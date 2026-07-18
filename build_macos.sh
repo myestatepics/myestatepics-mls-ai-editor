@@ -23,7 +23,9 @@ if ! "$PYTHON" -m PyInstaller --version >/dev/null 2>&1; then
 fi
 
 echo "Cleaning previous macOS builds..."
-rm -rf build dist
+rm -rf build
+mkdir -p dist
+find dist -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 rm -f ./*.spec
 
 PYINSTALLER_ARGS=(

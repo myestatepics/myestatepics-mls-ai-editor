@@ -2138,6 +2138,7 @@ def launch_gui() -> int:
             QSettings,
             QSignalBlocker,
             QThread,
+            QTimer,
             Qt,
             Signal,
             Slot,
@@ -2733,6 +2734,10 @@ def launch_gui() -> int:
                 self.resize(saved_size)
             if load_boolean_setting(self.settings, "ui/demo_mode", False):
                 self.demo_checkbox.setChecked(True)
+            # Run once after Qt has delivered startup widget events. This prevents
+            # delayed table notifications from overriding the required Select All
+            # default for a restored Incoming folder.
+            QTimer.singleShot(0, self.rescan_folder)
 
         def closeEvent(self, event):
             self.settings.setValue("ui/window_size", self.size())
@@ -2784,6 +2789,12 @@ def launch_gui() -> int:
             self.available_files, self.selected_files = scan_and_select_all(INPUT_DIR)
             self.refresh_selection_table()
             self.update_job_summary()
+            logging.info(
+                "Incoming scan: folder=%s found=%d selected=%d",
+                INPUT_DIR,
+                len(self.available_files),
+                len(self.selected_files),
+            )
 
         def select_images(self):
             self.apply_paths()
