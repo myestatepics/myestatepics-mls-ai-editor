@@ -1,4 +1,6 @@
 .env
+**/.env
+Application Support/
 .DS_Store
 __pycache__/
 *.py[cod]

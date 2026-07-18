@@ -44,7 +44,7 @@ from typing import Any
 import numpy as np
 from openai import OpenAI
 from PIL import Image, ImageFilter
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 
 
 APPLICATION_NAME = "MyEstatePics AI Editor"
@@ -82,7 +82,6 @@ def application_data_dir() -> Path:
 PROJECT_ROOT = Path(__file__).resolve().parent
 APP_DIR = PROJECT_ROOT
 PROJECT_DIR = PROJECT_ROOT
-PROJECT_ENV_FILE = PROJECT_ROOT / ".env"
 RESOURCE_DIR = resource_path(".")
 USER_DATA_DIR = application_data_dir()
 RUNTIME_DIR = USER_DATA_DIR / "runtime" if IS_PACKAGED else APP_DIR / "runtime"
@@ -132,6 +131,33 @@ WB_MIN_VALUE = 0.25
 WB_MAX_VALUE = 0.90
 WB_CAST_THRESHOLD = 0.025
 WB_MAX_CHANNEL_STD = 0.16
+
+
+def api_environment_path() -> Path:
+    """Return the sole API-key file for the current execution mode."""
+    return (
+        USER_DATA_DIR / ".env"
+        if IS_PACKAGED
+        else PROJECT_ROOT / ".env"
+    )
+
+
+def execution_mode_name() -> str:
+    return "packaged" if IS_PACKAGED else "source"
+
+
+def missing_api_key_message() -> str:
+    if IS_PACKAGED:
+        return (
+            "OpenAI API key not configured.\n\n"
+            f"Add your API key in:\n{api_environment_path()}\n\n"
+            "Required format:\nOPENAI_API_KEY=your_key_here\n\n"
+            "Demo Mode can still be used without an API key."
+        )
+    return (
+        "OPENAI_API_KEY is missing.\n\n"
+        f"Add it to the repository environment file:\n{api_environment_path()}"
+    )
 
 
 def configure_startup_logging() -> Path:
@@ -186,7 +212,7 @@ class VerificationResult:
 def validate_api_key(api_key: str | None) -> tuple[bool, str]:
     """Validate without ever exposing the key or any fragment of it."""
     if not api_key or not api_key.strip():
-        return False, "OPENAI_API_KEY is missing"
+        return False, missing_api_key_message()
     key = api_key.strip()
     lowered = key.lower()
     if (
@@ -198,15 +224,26 @@ def validate_api_key(api_key: str | None) -> tuple[bool, str]:
         or "…" in key
         or "..." in key
     ):
-        return False, "OPENAI_API_KEY is missing"
+        return False, missing_api_key_message()
     return True, "OpenAI API key loaded"
 
 
 def load_project_api_key() -> tuple[str | None, str]:
-    """Load the repository .env independently of the process working directory."""
-    load_dotenv(PROJECT_ENV_FILE, override=False)
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    """Load one mode-specific .env without exposing or logging its secret."""
+    env_path = api_environment_path()
+    if IS_PACKAGED:
+        # Finder-launched builds must never inherit a Terminal or repository key.
+        api_key = str(dotenv_values(env_path).get("OPENAI_API_KEY", "") or "").strip()
+    else:
+        load_dotenv(env_path, override=False)
+        api_key = os.getenv("OPENAI_API_KEY", "").strip()
     valid, message = validate_api_key(api_key)
+    logging.info(
+        "API configuration: mode=%s env_path=%s key_found=%s",
+        execution_mode_name(),
+        env_path,
+        valid,
+    )
     return (api_key if valid else None), message
 
 
@@ -2977,7 +3014,7 @@ def launch_gui() -> int:
             self.update_job_summary()
 
         def open_env(self):
-            env_path = PROJECT_ENV_FILE
+            env_path = api_environment_path()
             if not env_path.exists():
                 QMessageBox.warning(
                     self,

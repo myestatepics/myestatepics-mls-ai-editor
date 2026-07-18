@@ -290,7 +290,7 @@ def test_review_actions_move_accept_and_delete_outputs(tmp_path, app_module):
 
 
 def test_shell_environment_key_takes_precedence(tmp_path, monkeypatch, app_module):
-    monkeypatch.setattr(app_module, "PROJECT_ENV_FILE", tmp_path / ".env")
+    monkeypatch.setattr(app_module, "PROJECT_ROOT", tmp_path)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-shell-key")
     env_file = tmp_path / ".env"
     env_file.write_text("OPENAI_API_KEY=sk-project-key\n", encoding="utf-8")
@@ -302,7 +302,7 @@ def test_shell_environment_key_takes_precedence(tmp_path, monkeypatch, app_modul
 def test_project_env_key_loads_without_shell_export(tmp_path, monkeypatch, app_module):
     env_file = tmp_path / ".env"
     env_file.write_text("OPENAI_API_KEY=sk-project-key\n", encoding="utf-8")
-    monkeypatch.setattr(app_module, "PROJECT_ENV_FILE", env_file)
+    monkeypatch.setattr(app_module, "PROJECT_ROOT", tmp_path)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     key, message = app_module.load_project_api_key()
@@ -320,7 +320,7 @@ def test_project_env_load_is_independent_of_working_directory(
     elsewhere.mkdir()
     env_file = project / ".env"
     env_file.write_text("OPENAI_API_KEY=sk-project-key\n", encoding="utf-8")
-    monkeypatch.setattr(app_module, "PROJECT_ENV_FILE", env_file)
+    monkeypatch.setattr(app_module, "PROJECT_ROOT", project)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.chdir(elsewhere)
 
@@ -335,17 +335,17 @@ def test_project_env_load_is_independent_of_working_directory(
 )
 def test_invalid_api_keys_are_rejected(tmp_path, monkeypatch, app_module, value):
     env_file = tmp_path / ".env"
-    monkeypatch.setattr(app_module, "PROJECT_ENV_FILE", env_file)
+    monkeypatch.setattr(app_module, "PROJECT_ROOT", tmp_path)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     env_file.write_text(f"OPENAI_API_KEY={value}\n", encoding="utf-8")
     key, message = app_module.load_project_api_key()
     assert key is None
-    assert message == "OPENAI_API_KEY is missing"
+    assert "OPENAI_API_KEY is missing" in message
 
 
 def test_valid_api_key_is_accepted(tmp_path, monkeypatch, app_module):
     env_file = tmp_path / ".env"
-    monkeypatch.setattr(app_module, "PROJECT_ENV_FILE", env_file)
+    monkeypatch.setattr(app_module, "PROJECT_ROOT", tmp_path)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     env_file.write_text(
         "OPENAI_API_KEY=sk-valid-test-key\n", encoding="utf-8"
@@ -357,6 +357,73 @@ def test_valid_api_key_is_accepted(tmp_path, monkeypatch, app_module):
 def test_missing_key_blocks_production_but_not_demo(app_module):
     assert not app_module.api_key_allows_processing(None, demo_mode=False)
     assert app_module.api_key_allows_processing(None, demo_mode=True)
+
+
+def test_packaged_mode_uses_only_application_support_env(
+    tmp_path, monkeypatch, app_module
+):
+    project = tmp_path / "project"
+    support = tmp_path / "Application Support" / "MyEstatePics AI Editor"
+    project.mkdir()
+    support.mkdir(parents=True)
+    (project / ".env").write_text(
+        "OPENAI_API_KEY=sk-repository-key\n", encoding="utf-8"
+    )
+    (support / ".env").write_text(
+        "OPENAI_API_KEY=sk-packaged-key\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(app_module, "IS_PACKAGED", True)
+    monkeypatch.setattr(app_module, "PROJECT_ROOT", project)
+    monkeypatch.setattr(app_module, "USER_DATA_DIR", support)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-shell-key")
+
+    key, message = app_module.load_project_api_key()
+
+    assert key == "sk-packaged-key"
+    assert message == "OpenAI API key loaded"
+    assert app_module.api_environment_path() == support / ".env"
+
+
+def test_packaged_mode_never_falls_back_to_repository_or_shell_key(
+    tmp_path, monkeypatch, app_module
+):
+    project = tmp_path / "project"
+    support = tmp_path / "support"
+    project.mkdir()
+    support.mkdir()
+    (project / ".env").write_text(
+        "OPENAI_API_KEY=sk-repository-key\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(app_module, "IS_PACKAGED", True)
+    monkeypatch.setattr(app_module, "PROJECT_ROOT", project)
+    monkeypatch.setattr(app_module, "USER_DATA_DIR", support)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-shell-key")
+
+    key, message = app_module.load_project_api_key()
+
+    assert key is None
+    assert str(support / ".env") in message
+    assert "Demo Mode can still be used" in message
+
+
+def test_api_configuration_log_never_contains_key(
+    tmp_path, monkeypatch, caplog, app_module
+):
+    support = tmp_path / "support"
+    support.mkdir()
+    secret = "sk-never-log-this-value"
+    (support / ".env").write_text(
+        f"OPENAI_API_KEY={secret}\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(app_module, "IS_PACKAGED", True)
+    monkeypatch.setattr(app_module, "USER_DATA_DIR", support)
+
+    with caplog.at_level("INFO"):
+        key, _ = app_module.load_project_api_key()
+
+    assert key == secret
+    assert secret not in caplog.text
+    assert "key_found=True" in caplog.text
 
 
 def test_medium_quality_reaches_mocked_api(tmp_path, app_module):

@@ -67,6 +67,11 @@ if [[ ! -f "$PLIST" ]]; then
     exit 1
 fi
 
+if find "dist/$APP_NAME.app" -type f -name '.env' -print -quit | grep -q .; then
+    echo "Build failed: a secret .env file was included in the app bundle."
+    exit 1
+fi
+
 set_plist_string() {
     local key="$1"
     local value="$2"
