@@ -63,6 +63,11 @@ git tag -a v2.1.0-rc1 -m "Production v2.1 RC1"
 Tag naming is a process recommendation; no tag is currently required by the
 application.
 
+Before tagging, reconcile `PROGRAM_VERSION` with bundle versions in
+`build_macos.sh`; `PROMPT_VERSION` is independently controlled. Record
+`git rev-parse HEAD`, rebuild after any release commit, and verify the tag
+resolves to that tested commit.
+
 ## 7. GitHub release
 
 Push the reviewed commit and tag, then create a prerelease containing:
@@ -74,6 +79,11 @@ Push the reviewed commit and tag, then create a prerelease containing:
 - macOS architecture and signing/notarization status
 
 Do not upload `.env`, runtime folders, logs, photos, or raw history databases.
+
+Publish only after every gate passes. Include the DMG SHA-256, tested commit,
+architecture, signing state, and notarization state. A failed gate stops the
+release: fix it in a new commit, rebuild, and repeat all tests rather than
+replacing an already published artifact.
 
 ## 8. Post-release
 

@@ -3,6 +3,14 @@
 This changelog summarizes major engineering milestones. Early rapid-prototype
 commits were not consistently version-tagged.
 
+Future tagged releases must add an ISO date, tested commit, artifact checksum,
+and download reference.
+
+## Unreleased
+
+- Documentation audit corrections only; application code, tests, and the
+  production prompt are unchanged.
+
 ## Production v2.1 RC1
 
 ### Added

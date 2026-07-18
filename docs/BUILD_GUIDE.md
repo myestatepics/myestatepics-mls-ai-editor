@@ -7,6 +7,10 @@
 - Xcode Command Line Tools
 - dependencies from `requirements.txt`
 
+The current build is architecture-specific and validated on Apple Silicon. It
+does not produce a universal binary. Build from a clean checkout of the exact
+release commit.
+
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip
@@ -32,6 +36,9 @@ pytest -q
 ```
 
 Tests mock API responses and must not make paid calls.
+
+Before packaging, `git status --short` must be empty; record
+`git rev-parse HEAD` as the build provenance.
 
 ## Build the app
 
@@ -63,6 +70,20 @@ Output:
 `dist/MyEstatePics AI Editor.dmg`
 
 The DMG contains the app and an Applications shortcut.
+
+Validate the actual artifacts:
+
+```bash
+codesign --verify --deep --strict "dist/MyEstatePics AI Editor.app"
+plutil -p "dist/MyEstatePics AI Editor.app/Contents/Info.plist"
+file "dist/MyEstatePics AI Editor.app/Contents/MacOS/MyEstatePics AI Editor"
+hdiutil verify "dist/MyEstatePics AI Editor.dmg"
+shasum -a 256 "dist/MyEstatePics AI Editor.dmg"
+```
+
+Mount the DMG, copy the app to a temporary folder, launch that copy, and use
+Demo Mode for the smoke test. Do not make a production API call for build
+validation.
 
 ## Application icon
 

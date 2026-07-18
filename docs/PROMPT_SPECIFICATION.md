@@ -26,6 +26,10 @@ This ordering prevents aesthetic improvement from overriding property truth.
 
 ## Architectural Geometry Lock
 
+This is a documentation name for constraints in the prompt, not an independent
+model capability. The checked GUI indicator communicates that the rule is
+mandatory; it does not verify compliance.
+
 The implementation names the safeguard **Architectural Fidelity** in the
 external prompt and presents a checked, non-editable **Conservative
 Architecture Lock** in the GUI. Together they express a geometry lock:
@@ -88,3 +92,8 @@ especially mirrors, bright blank walls, window reflections, mixed lighting,
 dark cabinetry, warm materials, and difficult exterior views. A safeguard
 should be appended or refined narrowly; successful exposure, white balance,
 color, and MLS appearance should not be rewritten casually.
+
+The deterministic verifier cannot identify invented windows, openings, or
+inaccurate reflections. Human source/output comparison is therefore required.
+Every semantic prompt change must include mirror, reflection, window,
+bright-wall, and opening cases and a changelog rationale.

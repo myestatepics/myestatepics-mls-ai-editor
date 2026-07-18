@@ -20,6 +20,10 @@ NeedsReview, or Error.
 - side-by-side review with Accept, Move to Needs Review, Retry, and Delete
 - portable PyInstaller app and optional DMG build
 
+The current DMG is an internal, architecture-specific, ad-hoc-signed release
+candidate. It is not a universal, Developer ID-signed, or notarized public
+installer. Supported input formats are `.jpg`, `.jpeg`, and `.png`.
+
 ## Screenshots
 
 Screenshots are intentionally not committed yet. Future release documentation
@@ -57,6 +61,9 @@ The application is intentionally implemented in
 integration, verification, persistence, Demo Mode, and the PySide6 GUI. The
 read-only production prompt is loaded from `prompts/mls_production.txt`.
 Writable packaged data is stored in macOS Application Support.
+
+Folder scans are event-driven, not continuous: the application scans when a
+folder is selected or restored, when Rescan/Analyze is used, and after a batch.
 
 See [Technical Design](docs/TECHNICAL_DESIGN.md) for component and data-flow
 details.

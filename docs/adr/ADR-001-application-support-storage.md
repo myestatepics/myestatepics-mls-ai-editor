@@ -15,7 +15,9 @@ Packaged writable state uses:
 `~/Library/Application Support/MyEstatePics AI Editor/`
 
 This includes `.env`, `preferences.ini`, startup logs, default runtime folders,
-data, and cache. Source mode retains repository-local development behavior.
+data, and cache. Source mode keeps repository-local runtime results and reads
+the repository `.env`; QSettings preferences and startup logs still use
+Application Support.
 
 ## Alternatives
 

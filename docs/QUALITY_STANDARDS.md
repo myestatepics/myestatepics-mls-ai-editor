@@ -4,7 +4,7 @@
 
 An image is MyEstatePics MLS Ready when it is a truthful, natural-looking
 correction of the source, technically suitable for delivery, and free of
-material generative defects. Automated PASS is necessary but does not replace
+material generative defects. Automated checks support, but do not replace,
 operator review.
 
 ## Mandatory visual criteria
@@ -32,11 +32,11 @@ Current verifier thresholds are implementation safeguards:
 |---|---|
 | normalized sharpness ratio | FAIL below 0.45; REVIEW below 0.60 |
 | global brightness shift | REVIEW above the adaptive limit |
-| adaptive brightness limit | 0.45 for very dark input, then 0.38, 0.32, 0.27, or 0.22; never below configured 0.34 |
+| adaptive brightness limit | effective limit 0.45 below source mean 0.25; 0.38 from 0.25 to below 0.35; 0.34 at source mean 0.35 or above |
 | clipped-highlight fraction | REVIEW above 0.24 |
 | crushed-shadow fraction | REVIEW above 0.28 |
 | global chromaticity shift | REVIEW above 0.055 |
-| JPEG size | target at or below 2,000,000 bytes; retain and REVIEW if still oversize at quality 78 |
+| JPEG size | target at or below 2,000,000 bytes; attempts quality 95, 93, …, 79; retain and REVIEW if still oversize |
 
 Chromaticity is a review signal, not proof of a particular material error.
 
@@ -56,6 +56,13 @@ Completed is the normal destination for a successful edit. NeedsReview is for
 an actual verifier, moderation, decode, dimension, corruption, or export
 concern and must include a reason. Exceptions route to Error with a report.
 
+The current implementation routes verifier `FAIL` to NeedsReview. A verifier
+`REVIEW` advisory is logged but, by itself, does not redirect an otherwise
+valid result from Completed. Invalid dimensions and the hard size limit also
+route to NeedsReview. Runtime exceptions create an Error text report rather
+than a processed image. A Completed destination therefore does not eliminate
+the need for human architectural and visual review.
+
 ## Human acceptance
 
 Before delivery, compare original and output at fit-to-screen and 100%:
@@ -66,5 +73,6 @@ Before delivery, compare original and output at fit-to-screen and 100%:
 4. inspect fine detail, noise, halos, and compression
 5. confirm filename and destination
 
-If any mandatory criterion is uncertain, route to NeedsReview rather than
-accepting the image.
+Every item is binary: pass only when the output can be matched to the source
+without uncertainty. Record a specific failure reason for any false or
+uncertain item and route it to NeedsReview rather than accepting the image.

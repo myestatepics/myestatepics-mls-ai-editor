@@ -13,6 +13,9 @@ Keep the production prompt in `prompts/mls_production.txt` and load it at
 runtime through centralized resource discovery. Maintain `PROMPT_VERSION`
 separately from `PROGRAM_VERSION`.
 
+Runtime adaptive guidance may be appended for unusually dark inputs, but it
+may not replace or weaken the external baseline.
+
 ## Alternatives
 
 - Embed a Python string: rejected because it creates duplicate or obscured

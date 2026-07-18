@@ -60,14 +60,21 @@ sequenceDiagram
     participant D as Disk
     U->>G: Start checked batch
     G->>G: Validate folders, key, eligibility, cost
-    G->>U: Paid confirmation
-    G->>W: Files, quality, client
+    alt Production
+        G->>U: Paid confirmation
+        U-->>G: Confirm
+        G->>W: Files, quality, client
+    else Demo
+        G->>W: Files, quality, no client
+    end
     loop Each image
         W->>W: Analyze source and build adaptive addendum
-        W->>A: images.edit
-        A-->>W: PNG and optional usage
+        opt Production only
+            W->>A: images.edit
+            A-->>W: PNG and optional usage
+        end
         W->>V: Compare source and generated output
-        V-->>W: PASS / REVIEW with reasons
+        V-->>W: PASS / REVIEW / FAIL with reasons
         W->>D: Atomic JPEG, CSV row, SQLite record
         W-->>G: Progress event
     end
@@ -98,10 +105,13 @@ creates the client.
 Generated images are converted to RGB. Optional automatic sharpening is
 disabled in current configuration. The verifier measures normalized sharpness,
 adaptive brightness shift, highlight clipping, shadow crushing, and
-brightness-independent chromaticity shift. Results other than PASS route to
-NeedsReview with reasons.
+brightness-independent chromaticity shift. Verifier `FAIL` routes to
+NeedsReview with reasons. A verifier `REVIEW` advisory is recorded but does
+not alone prevent Completed routing. Invalid dimensions and hard output-size
+failure also route to NeedsReview. Runtime exceptions create an Error text
+report rather than a processed image.
 
-JPEG encoding begins at quality 95 and steps down to 78 while targeting
+JPEG encoding begins at quality 95 and attempts odd values down to 79 while targeting
 2,000,000 bytes. An oversize result is retained and routed for review. EXIF
 orientation is normalized to 1; safe EXIF and ICC data are retained where
 supported. Writes use a temporary file and `os.replace`.
@@ -115,7 +125,9 @@ block reprocessing. Demo and production paths are isolated.
 
 ## Configuration and storage
 
-Source mode loads `.env` from the repository. Packaged mode reads only:
+Source mode loads `.env` from the repository and stores result data below the
+repository runtime folder. QSettings preferences and startup logs still use
+Application Support. Packaged mode reads only:
 
 `~/Library/Application Support/MyEstatePics AI Editor/.env`
 

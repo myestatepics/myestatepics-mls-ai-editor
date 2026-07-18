@@ -28,7 +28,9 @@ the packaged app.
 ## Folder setup
 
 Choose Incoming and Completed. NeedsReview, Error, and Logs are under Advanced
-Folders. These result folders must be distinct. The app remembers selections.
+Folders. Incoming, Completed, NeedsReview, and Error must be distinct, and
+result folders must not be inside Incoming. Logs and Data are not part of that
+overlap check. The app remembers selections.
 
 Choosing Incoming scans `.jpg`, `.jpeg`, and `.png` files and checks all by
 default. Uncheck any image that should not run. Select All, Clear All, Rescan
@@ -42,7 +44,9 @@ source eligible again.
 
 Enable **Demo Mode — No API Charges** to exercise the workflow without a key or
 API request. Choose All Pass, Some Need Review, or Include Error. Demo outputs
-and records remain under `runtime/Demo` and do not affect production routing.
+and records remain under `<repository>/runtime/Demo` for source runs or
+Application Support `runtime/Demo` for packaged runs. They do not affect
+production routing.
 
 ## Production Mode
 
@@ -58,8 +62,9 @@ The Review window displays Original and AI Output.
 
 - **Accept** moves a NeedsReview output to Completed.
 - **Move to Needs Review** routes a Completed output for review.
-- **Retry** deletes the current output and queues the source; it does not start
-  or charge automatically.
+- **Retry** immediately deletes the current output after confirmation and
+  queues the source; it does not start or charge automatically. Use it only
+  while the original source remains available.
 - **Delete Output** removes only the output.
 - Previous and Next navigate results.
 
@@ -78,6 +83,10 @@ Confirm the correct file for the launch mode and remove quotes or spaces around
 ### No images selected
 
 Click Rescan Folder or Select All. Verify files use a supported extension.
+
+The application does not watch Incoming continuously. Use Rescan Folder or
+Analyze after changing files outside the application. Review Results includes
+both Completed and NeedsReview outputs.
 
 ### Already exists
 

@@ -13,6 +13,10 @@ Build a windowed, onedir PyInstaller application with bundled read-only
 resources, macOS bundle metadata, an ad-hoc internal signature, and an optional
 DMG containing an Applications shortcut.
 
+Onedir is preferred to onefile because its bundle is inspectable and avoids
+per-launch extraction. “Portable” means independent of Python and the
+repository, not universal across CPU architectures.
+
 ## Alternatives
 
 - Require source launch: rejected for operational deployment.

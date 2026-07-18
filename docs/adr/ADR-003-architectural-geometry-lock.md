@@ -28,3 +28,5 @@ source. The GUI displays a checked Conservative Architecture Lock.
 Some difficult images may receive less aggressive correction. Human review and
 regression coverage remain necessary because prompt safeguards are not a formal
 guarantee.
+
+The GUI checkbox is an indicator, not an enforcement or verification engine.

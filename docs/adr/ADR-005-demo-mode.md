@@ -11,7 +11,8 @@ API credentials, network access, or charges.
 
 Provide a visible Demo Mode that never creates an OpenAI client. It copies the
 source as mock output, simulates pass/review/error outcomes, records DEMO
-history/log rows, reports zero cost, and uses isolated `runtime/Demo` folders.
+history/log rows, reports zero cost, and uses the active runtime's isolated
+`Demo` folders. Simulated errors are reports rather than processed images.
 
 ## Alternatives
 

@@ -3,6 +3,9 @@
 Roadmap items are proposals, not committed features. Priority may change after
 production evidence and commercial requirements are reviewed.
 
+Before implementation, each proposal requires an owner, target release,
+measurable acceptance criteria, and rollback or migration impact.
+
 ## Current status
 
 Production v2.1 RC1 provides a portable macOS batch GUI, external production
@@ -30,6 +33,9 @@ review routing, CSV/SQLite records, and repeatable app/DMG builds.
 4. Profile startup, image analysis, encoding, and batch throughput.
 5. Define support diagnostics and reproducible issue-report templates.
 
+Near-term exit evidence is merged implementation, green no-paid-call tests,
+updated operator/developer documentation, and a recorded Demo smoke test.
+
 ## Mid-term
 
 - batch history browsing and export
@@ -39,12 +45,18 @@ review routing, CSV/SQLite records, and repeatable app/DMG builds.
 - automated release checksums and GitHub prerelease workflow
 - expanded mirror, window, mixed-light, and material regression coverage
 
+Mid-term exit evidence additionally requires an ADR, supported-platform matrix,
+and packaged validation on each claimed architecture.
+
 ## Long-term
 
 - Pixlmob production readiness assessment and delivery integration
 - commercial release, licensing, update distribution, and support model
 - role-based operational workflows if multi-user demand is validated
 - configurable approved profiles without weakening architectural fidelity
+
+Long-term work additionally requires approved product requirements, security
+and privacy review, and an operational support plan.
 
 Commercial work must preserve source truth, explicit cost control, reviewability,
 and secret/data handling standards.

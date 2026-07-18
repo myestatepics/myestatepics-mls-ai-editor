@@ -32,6 +32,27 @@ are not implemented.
 
 ## Functional requirements
 
+Stable requirement IDs:
+
+- **FR-01 Selection:** every eligible supported file is selected after folder
+  selection, settings restoration, or rescan; individual toggles remain usable.
+- **FR-02 Eligibility:** only a same-named current output in the active mode's
+  Completed, NeedsReview, or Error location may block processing. Historical
+  records never block it.
+- **FR-03 Cost control:** selected count, quality, and estimate update together,
+  and paid work requires confirmation before the first request.
+- **FR-04 Credential safety:** Production requires a normalized `sk-` key and
+  never displays it; Demo requires no key and creates no client.
+- **FR-05 Output:** successful output keeps the exact filename, is JPEG data,
+  attempts safe metadata preservation, and does not exceed 4.5 MB.
+- **FR-06 Disposition:** verifier FAIL or a moderation, decode, dimension,
+  corruption, or hard-size problem routes to NeedsReview with a reason; an
+  exception writes an Error report.
+- **FR-07 Isolation:** Demo and Production outputs, history, and eligibility
+  never affect each other.
+- **FR-08 Audit:** CSV and SQLite capture mode, quality, disposition, reason,
+  prompt version, cost/usage where available, and final review label.
+
 - Preserve the original file and exact filename.
 - Support Low and Medium quality, with Low as the default.
 - Process only checked and eligible files.
@@ -87,7 +108,8 @@ the user starts a confirmed batch. Delete Output leaves the original intact.
 
 Demo Mode requires no key and makes no OpenAI client or request. It copies the
 source as a simulated output, records DEMO history/log data, supports simulated
-pass/review/error outcomes, and uses only `runtime/Demo` destinations.
+pass/review/error outcomes, and uses only the active runtime's `Demo`
+destinations. Simulated errors create reports rather than processed images.
 
 ## Production Mode
 
@@ -100,6 +122,16 @@ available, and uses fallback cost estimates for presentation and records.
 PyInstaller produces a windowed macOS `.app`; an optional script creates a DMG.
 Packaged resources are read from the bundle. Preferences, key configuration,
 startup logs, runtime data, and cache live under Application Support.
+Artifacts are architecture-specific and ad-hoc signed until a notarized
+distribution workflow is approved.
+
+## Release acceptance
+
+Acceptance requires all FR items, a green no-paid-call suite, a Demo smoke test
+from the built DMG, verified metadata and secret exclusion, working
+documentation links, and the objective checks in
+[QUALITY_STANDARDS.md](QUALITY_STANDARDS.md). A verifier REVIEW advisory is
+logged but does not currently force NeedsReview.
 
 ## Future commercial direction
 
