@@ -79,8 +79,10 @@ def application_data_dir() -> Path:
     return path
 
 
-APP_DIR = Path(__file__).resolve().parent
-PROJECT_DIR = APP_DIR
+PROJECT_ROOT = Path(__file__).resolve().parent
+APP_DIR = PROJECT_ROOT
+PROJECT_DIR = PROJECT_ROOT
+PROJECT_ENV_FILE = PROJECT_ROOT / ".env"
 RESOURCE_DIR = resource_path(".")
 USER_DATA_DIR = application_data_dir()
 RUNTIME_DIR = USER_DATA_DIR / "runtime" if IS_PACKAGED else APP_DIR / "runtime"
@@ -184,7 +186,7 @@ class VerificationResult:
 def validate_api_key(api_key: str | None) -> tuple[bool, str]:
     """Validate without ever exposing the key or any fragment of it."""
     if not api_key or not api_key.strip():
-        return False, "OPENAI_API_KEY is empty. Add a valid key to the project .env file."
+        return False, "OPENAI_API_KEY is missing"
     key = api_key.strip()
     lowered = key.lower()
     if (
@@ -196,17 +198,20 @@ def validate_api_key(api_key: str | None) -> tuple[bool, str]:
         or "…" in key
         or "..." in key
     ):
-        return False, "OPENAI_API_KEY in the project .env file is invalid or masked."
-    return True, "API key loaded from the project .env file."
+        return False, "OPENAI_API_KEY is missing"
+    return True, "OpenAI API key loaded"
 
 
 def load_project_api_key() -> tuple[str | None, str]:
-    """Reload the application-local .env and override stale shell values."""
-    env_path = USER_DATA_DIR / ".env" if IS_PACKAGED else APP_DIR / ".env"
-    load_dotenv(dotenv_path=env_path, override=True)
-    api_key = os.getenv("OPENAI_API_KEY")
+    """Load the repository .env independently of the process working directory."""
+    load_dotenv(PROJECT_ENV_FILE, override=False)
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
     valid, message = validate_api_key(api_key)
-    return (api_key.strip() if valid and api_key else None), message
+    return (api_key if valid else None), message
+
+
+def api_key_allows_processing(api_key: str | None, demo_mode: bool) -> bool:
+    return demo_mode or api_key is not None
 
 
 def load_prompt() -> str:
@@ -2954,7 +2959,9 @@ def launch_gui() -> int:
             self.update_start_enabled()
 
         def update_start_enabled(self):
-            api_ready = self.demo_checkbox.isChecked() or self.api_key is not None
+            api_ready = api_key_allows_processing(
+                self.api_key, self.demo_checkbox.isChecked()
+            )
             enabled = (
                 not self.processing_active
                 and self.folder_configuration_valid
@@ -2970,7 +2977,7 @@ def launch_gui() -> int:
             self.update_job_summary()
 
         def open_env(self):
-            env_path = USER_DATA_DIR / ".env" if IS_PACKAGED else APP_DIR / ".env"
+            env_path = PROJECT_ENV_FILE
             if not env_path.exists():
                 QMessageBox.warning(
                     self,

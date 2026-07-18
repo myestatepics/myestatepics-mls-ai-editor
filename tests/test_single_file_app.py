@@ -289,18 +289,44 @@ def test_review_actions_move_accept_and_delete_outputs(tmp_path, app_module):
     assert not completed.exists()
 
 
-def test_env_overrides_stale_shell_key_and_reload(tmp_path, monkeypatch, app_module):
-    monkeypatch.setattr(app_module, "APP_DIR", tmp_path)
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-stale-shell-key")
+def test_shell_environment_key_takes_precedence(tmp_path, monkeypatch, app_module):
+    monkeypatch.setattr(app_module, "PROJECT_ENV_FILE", tmp_path / ".env")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-shell-key")
     env_file = tmp_path / ".env"
-    env_file.write_text("OPENAI_API_KEY=sk-project-key-one\n", encoding="utf-8")
+    env_file.write_text("OPENAI_API_KEY=sk-project-key\n", encoding="utf-8")
     key, message = app_module.load_project_api_key()
-    assert key == "sk-project-key-one"
+    assert key == "sk-shell-key"
     assert "loaded" in message.lower()
 
-    env_file.write_text("OPENAI_API_KEY=sk-project-key-two\n", encoding="utf-8")
-    reloaded_key, _ = app_module.load_project_api_key()
-    assert reloaded_key == "sk-project-key-two"
+
+def test_project_env_key_loads_without_shell_export(tmp_path, monkeypatch, app_module):
+    env_file = tmp_path / ".env"
+    env_file.write_text("OPENAI_API_KEY=sk-project-key\n", encoding="utf-8")
+    monkeypatch.setattr(app_module, "PROJECT_ENV_FILE", env_file)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    key, message = app_module.load_project_api_key()
+
+    assert key == "sk-project-key"
+    assert message == "OpenAI API key loaded"
+
+
+def test_project_env_load_is_independent_of_working_directory(
+    tmp_path, monkeypatch, app_module
+):
+    project = tmp_path / "project"
+    project.mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    env_file = project / ".env"
+    env_file.write_text("OPENAI_API_KEY=sk-project-key\n", encoding="utf-8")
+    monkeypatch.setattr(app_module, "PROJECT_ENV_FILE", env_file)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.chdir(elsewhere)
+
+    key, _ = app_module.load_project_api_key()
+
+    assert key == "sk-project-key"
 
 
 @pytest.mark.parametrize(
@@ -308,20 +334,29 @@ def test_env_overrides_stale_shell_key_and_reload(tmp_path, monkeypatch, app_mod
     ["", "your_openai_api_key_here", "sk-placeholder-key", "sk-***masked***", "not-a-key"],
 )
 def test_invalid_api_keys_are_rejected(tmp_path, monkeypatch, app_module, value):
-    monkeypatch.setattr(app_module, "APP_DIR", tmp_path)
-    (tmp_path / ".env").write_text(f"OPENAI_API_KEY={value}\n", encoding="utf-8")
+    env_file = tmp_path / ".env"
+    monkeypatch.setattr(app_module, "PROJECT_ENV_FILE", env_file)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    env_file.write_text(f"OPENAI_API_KEY={value}\n", encoding="utf-8")
     key, message = app_module.load_project_api_key()
     assert key is None
-    assert "invalid" in message.lower() or "empty" in message.lower()
+    assert message == "OPENAI_API_KEY is missing"
 
 
 def test_valid_api_key_is_accepted(tmp_path, monkeypatch, app_module):
-    monkeypatch.setattr(app_module, "APP_DIR", tmp_path)
-    (tmp_path / ".env").write_text(
+    env_file = tmp_path / ".env"
+    monkeypatch.setattr(app_module, "PROJECT_ENV_FILE", env_file)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    env_file.write_text(
         "OPENAI_API_KEY=sk-valid-test-key\n", encoding="utf-8"
     )
     key, _ = app_module.load_project_api_key()
     assert key == "sk-valid-test-key"
+
+
+def test_missing_key_blocks_production_but_not_demo(app_module):
+    assert not app_module.api_key_allows_processing(None, demo_mode=False)
+    assert app_module.api_key_allows_processing(None, demo_mode=True)
 
 
 def test_medium_quality_reaches_mocked_api(tmp_path, app_module):
