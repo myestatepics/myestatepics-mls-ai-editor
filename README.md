@@ -88,6 +88,7 @@ Outputs are created under `dist/`. See [Build Guide](docs/BUILD_GUIDE.md).
 - [Release Process](docs/RELEASE_PROCESS.md)
 - [Roadmap](docs/ROADMAP.md)
 - [Changelog](docs/CHANGELOG.md)
+- [Production Readiness Audit](production_audit.md)
 - [Legacy v1.6 Baseline](docs/legacy-v1.6-baseline.md)
 - [ADR Index](docs/adr/README.md)
 - [ADR-001: Application Support Storage](docs/adr/ADR-001-application-support-storage.md)
