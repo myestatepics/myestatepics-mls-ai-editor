@@ -56,8 +56,8 @@ DATA_DIR = RUNTIME_DIR / "Data"
 HISTORY_DB = DATA_DIR / "image_history.sqlite3"
 PROMPT_FILE = APP_DIR / "prompts" / "mls_production.txt"
 
-PROGRAM_VERSION = "2.0 RC1"
-PROMPT_VERSION = PROGRAM_VERSION
+PROGRAM_VERSION = "2.1 RC1"
+PROMPT_VERSION = "2.0 RC1"
 MODEL = "gpt-image-2"
 QUALITY = "low"
 QUALITY_OPTIONS = ("low", "medium")
@@ -1378,6 +1378,121 @@ def estimated_cost_per_image(quality: str) -> float:
     return OBSERVED_ESTIMATED_COST_PER_IMAGE
 
 
+FOLDER_SETTING_KEYS = (
+    "folders/incoming",
+    "folders/completed",
+    "folders/needs_review",
+    "folders/error",
+    "folders/logs",
+)
+ADVANCED_FOLDERS_SETTING = "ui/advanced_folders_expanded"
+
+
+def scan_supported_images(input_dir: Path) -> list[Path]:
+    """Read the current Incoming directory without using cached or historical state."""
+    input_dir = Path(input_dir)
+    input_dir.mkdir(parents=True, exist_ok=True)
+    return sorted(
+        path.resolve()
+        for path in input_dir.iterdir()
+        if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS
+    )
+
+
+def selected_batch_cost(
+    selected_files: list[Path] | set[Path],
+    quality: str,
+    demo_mode: bool,
+) -> float:
+    if demo_mode:
+        return 0.0
+    return len(selected_files) * estimated_cost_per_image(quality)
+
+
+def update_checked_selection(
+    selected_files: set[Path], path: Path, checked: bool
+) -> set[Path]:
+    """Return an updated checked-file set for a single table-row change."""
+    updated = set(selected_files)
+    if checked:
+        updated.add(Path(path))
+    else:
+        updated.discard(Path(path))
+    return updated
+
+
+def requires_paid_confirmation(demo_mode: bool) -> bool:
+    return not demo_mode
+
+
+def validate_folder_configuration(
+    input_dir: Path,
+    output_dir: Path,
+    review_dir: Path,
+    error_dir: Path,
+) -> tuple[bool, str]:
+    """Reject folder combinations that could overwrite or misroute source images."""
+    named_paths = {
+        "Incoming": Path(input_dir).expanduser().resolve(),
+        "Completed": Path(output_dir).expanduser().resolve(),
+        "NeedsReview": Path(review_dir).expanduser().resolve(),
+        "Error": Path(error_dir).expanduser().resolve(),
+    }
+    invalid_pairs = (
+        ("Incoming", "Completed"),
+        ("Incoming", "NeedsReview"),
+        ("Incoming", "Error"),
+        ("Completed", "NeedsReview"),
+        ("Completed", "Error"),
+        ("NeedsReview", "Error"),
+    )
+    for first, second in invalid_pairs:
+        if named_paths[first] == named_paths[second]:
+            return False, f"{first} and {second} must use different folders."
+    return True, "Folder configuration is valid."
+
+
+def paid_confirmation_text(
+    image_count: int,
+    quality: str,
+    estimated_cost: float,
+) -> str:
+    return (
+        f"Images: {image_count}\n"
+        f"Quality: {quality.title()}\n"
+        f"Estimated cost: ${estimated_cost:.2f}\n"
+        "Demo Mode: Off\n"
+        f"Prompt: MLS Production v{PROMPT_VERSION}"
+    )
+
+
+def retry_confirmation_text(filename: str, quality: str) -> str:
+    return (
+        f"Image: {filename}\n"
+        f"Quality: {quality.title()}\n"
+        f"Estimated additional cost: ${estimated_cost_per_image(quality):.2f}\n\n"
+        "Queue this image for retry? Processing will not start automatically."
+    )
+
+
+def load_folder_settings(settings: Any, defaults: tuple[Path, ...]) -> tuple[Path, ...]:
+    return tuple(
+        Path(settings.value(key, str(default)))
+        for key, default in zip(FOLDER_SETTING_KEYS, defaults)
+    )
+
+
+def save_folder_setting(settings: Any, index: int, path: Path) -> None:
+    settings.setValue(FOLDER_SETTING_KEYS[index], str(Path(path)))
+
+
+def load_boolean_setting(settings: Any, key: str, default: bool = False) -> bool:
+    value = settings.value(key, default)
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def configure_runtime_paths(
     input_dir: Path,
     output_dir: Path,
@@ -1887,6 +2002,28 @@ def accept_review_output(filename: str) -> Path:
     return destination
 
 
+def move_output_to_review(filename: str) -> Path:
+    """Move an existing Completed output into the active NeedsReview folder."""
+    source = OUTPUT_DIR / filename
+    destination = REVIEW_DIR / filename
+    if destination.exists():
+        raise FileExistsError(f"NeedsReview already contains {filename}.")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    source.replace(destination)
+    set_latest_history_label(filename, "UNRESOLVED")
+    return destination
+
+
+def delete_active_output(filename: str) -> None:
+    """Delete the active result only; the Incoming original and history remain."""
+    for directory in (REVIEW_DIR, OUTPUT_DIR):
+        candidate = directory / filename
+        if candidate.is_file():
+            candidate.unlink()
+            return
+    raise FileNotFoundError(f"No output exists for {filename}.")
+
+
 def set_review_label(filename: str, label: str) -> None:
     with sqlite3.connect(HISTORY_DB) as connection:
         connection.execute(
@@ -1899,9 +2036,27 @@ def set_review_label(filename: str, label: str) -> None:
         connection.commit()
 
 
+def set_latest_history_label(filename: str, label: str) -> None:
+    if not HISTORY_DB.exists():
+        return
+    with sqlite3.connect(HISTORY_DB) as connection:
+        connection.execute(
+            """
+            UPDATE image_history SET implicit_final_label = ?
+            WHERE id = (
+                SELECT id FROM image_history
+                WHERE filename = ?
+                ORDER BY id DESC LIMIT 1
+            )
+            """,
+            (label, filename),
+        )
+        connection.commit()
+
+
 def launch_gui() -> int:
     try:
-        from PySide6.QtCore import QObject, QThread, Qt, Signal, Slot, QUrl
+        from PySide6.QtCore import QObject, QSettings, QThread, Qt, Signal, Slot, QUrl
         from PySide6.QtGui import QDesktopServices, QPixmap
         from PySide6.QtWidgets import (
             QApplication,
@@ -2081,27 +2236,39 @@ def launch_gui() -> int:
             self.metrics.setObjectName("appSubtitle")
             images = QSplitter()
             self.original = QLabel("Original")
-            self.processed = QLabel("Processed")
-            for label in (self.original, self.processed):
+            self.processed = QLabel("AI Output")
+            for caption, label in (
+                ("Original", self.original),
+                ("AI Output", self.processed),
+            ):
                 label.setObjectName("imageCanvas")
                 label.setAlignment(Qt.AlignCenter)
                 label.setMinimumSize(400, 400)
-                images.addWidget(label)
+                panel = QFrame()
+                panel_layout = QVBoxLayout(panel)
+                panel_layout.setContentsMargins(0, 0, 0, 0)
+                heading = QLabel(caption)
+                heading.setObjectName("metricValue")
+                panel_layout.addWidget(heading)
+                panel_layout.addWidget(label, 1)
+                images.addWidget(panel)
             buttons = QHBoxLayout()
             for text, handler in (
                 ("Previous", self.previous),
                 ("Next", self.next),
                 ("Accept", self.accept_image),
-                ("Reject", self.reject_image),
-                ("Reprocess", self.reprocess_image),
+                ("Move to Needs Review", self.move_to_review),
+                ("Retry", self.retry_image),
+                ("Delete Output", self.delete_output),
             ):
                 button = QPushButton(text)
                 if text == "Accept":
                     button.setObjectName("primaryButton")
-                elif text == "Reject":
+                elif text == "Delete Output":
                     button.setObjectName("dangerButton")
-                elif text == "Reprocess":
+                elif text in {"Move to Needs Review", "Retry"}:
                     button.setObjectName("reviewButton")
+                if text == "Retry":
                     self.reprocess_button = button
                 button.clicked.connect(handler)
                 buttons.addWidget(button)
@@ -2115,13 +2282,23 @@ def launch_gui() -> int:
         def set_demo_mode(self, enabled):
             self.demo_mode = enabled
             self.reprocess_button.setText(
-                "Reprocess (Simulated)" if enabled else "Reprocess"
+                "Retry (Simulated)" if enabled else "Retry"
             )
 
         def refresh_files(self):
-            self.files = sorted(
-                p for p in REVIEW_DIR.glob("*") if p.suffix.lower() in SUPPORTED_EXTENSIONS
+            review_files = sorted(
+                path
+                for path in REVIEW_DIR.glob("*")
+                if path.suffix.lower() in SUPPORTED_EXTENSIONS
             )
+            review_names = {path.name for path in review_files}
+            completed_files = sorted(
+                path
+                for path in OUTPUT_DIR.glob("*")
+                if path.suffix.lower() in SUPPORTED_EXTENSIONS
+                and path.name not in review_names
+            )
+            self.files = review_files + completed_files
             self.index = min(self.index, max(0, len(self.files) - 1))
             self.show_current()
 
@@ -2170,19 +2347,31 @@ def launch_gui() -> int:
             if not self.files:
                 return
             source = self.files[self.index]
+            if source.parent == REVIEW_DIR:
+                try:
+                    accept_review_output(source.name)
+                except FileExistsError as error:
+                    QMessageBox.warning(self, "Existing file", str(error))
+                    return
+            else:
+                set_latest_history_label(source.name, "ACCEPTED")
+            self.refresh_files()
+
+        def move_to_review(self):
+            if not self.files:
+                return
+            source = self.files[self.index]
+            if source.parent == REVIEW_DIR:
+                self.reason.setText("This output is already in NeedsReview.")
+                return
             try:
-                accept_review_output(source.name)
+                move_output_to_review(source.name)
             except FileExistsError as error:
                 QMessageBox.warning(self, "Existing file", str(error))
                 return
             self.refresh_files()
 
-        def reject_image(self):
-            if self.files:
-                set_review_label(self.files[self.index].name, "REJECTED")
-                self.reason.setText("Rejected; output remains in NeedsReview.")
-
-        def reprocess_image(self):
+        def retry_image(self):
             if not self.files:
                 return
             filename = self.files[self.index].name
@@ -2190,14 +2379,27 @@ def launch_gui() -> int:
                 self,
                 "Simulated reprocess" if self.demo_mode else "Paid reprocess",
                 (
-                    f"Simulate reprocessing {filename}? No API call will be made."
+                    f"Queue {filename} for a simulated retry? No API call will be made."
                     if self.demo_mode
-                    else f"Reprocess {filename}? This makes another paid API call."
+                    else retry_confirmation_text(filename, QUALITY)
                 ),
             )
             if answer == QMessageBox.Yes:
-                self.files[self.index].unlink()
+                delete_active_output(filename)
                 self.reprocess.emit(filename)
+                self.refresh_files()
+
+        def delete_output(self):
+            if not self.files:
+                return
+            filename = self.files[self.index].name
+            answer = QMessageBox.question(
+                self,
+                "Delete output",
+                f"Delete the output for {filename}? The Incoming original will remain untouched.",
+            )
+            if answer == QMessageBox.Yes:
+                delete_active_output(filename)
                 self.refresh_files()
 
     class MainWindow(QMainWindow):
@@ -2211,8 +2413,12 @@ def launch_gui() -> int:
             self.processing_active = False
             self.api_key: str | None = None
             self.selected_files: set[Path] = set()
+            self.available_files: list[Path] = []
+            self.updating_table = False
+            self.folder_configuration_valid = True
+            self.settings = QSettings("MyEstatePics", "AIEditor")
             self.review_window = ReviewWindow(self)
-            self.review_window.reprocess.connect(lambda _filename: self.start())
+            self.review_window.reprocess.connect(self.queue_retry)
             root = QWidget()
             root.setObjectName("appRoot")
             root_layout = QVBoxLayout(root)
@@ -2228,20 +2434,32 @@ def launch_gui() -> int:
             scroll.setWidget(content)
             root_layout.addWidget(scroll)
 
-            header = QHBoxLayout()
+            header = QFrame()
+            header_layout = QHBoxLayout(header)
+            header_layout.setContentsMargins(0, 0, 0, 0)
             header_text = QVBoxLayout()
-            header_text.setSpacing(2)
             title = QLabel("MyEstatePics AI Editor")
             title.setObjectName("appTitle")
-            subtitle = QLabel("Professional MLS photo enhancement • originals always stay untouched")
+            subtitle = QLabel("Commercial MLS batch photo editing")
             subtitle.setObjectName("appSubtitle")
             header_text.addWidget(title)
             header_text.addWidget(subtitle)
+            header_status = QGridLayout()
             version = QLabel(f"Production v{PROGRAM_VERSION}")
             version.setObjectName("versionBadge")
-            header.addLayout(header_text, 1)
-            header.addWidget(version, 0, Qt.AlignTop)
-            layout.addLayout(header)
+            prompt_version = QLabel(f"Prompt v{PROMPT_VERSION}")
+            prompt_version.setObjectName("versionBadge")
+            self.api_key_status = QLabel()
+            self.api_key_status.setObjectName("appSubtitle")
+            self.demo_status = QLabel("Demo Mode: Off")
+            self.demo_status.setObjectName("appSubtitle")
+            header_status.addWidget(version, 0, 0)
+            header_status.addWidget(prompt_version, 0, 1)
+            header_status.addWidget(self.api_key_status, 1, 0, 1, 2)
+            header_status.addWidget(self.demo_status, 2, 0, 1, 2)
+            header_layout.addLayout(header_text, 1)
+            header_layout.addLayout(header_status)
+            layout.addWidget(header)
 
             self.demo_banner = QLabel("DEMO — NO API CALLS")
             self.demo_banner.setObjectName("demoBanner")
@@ -2249,169 +2467,179 @@ def launch_gui() -> int:
             self.demo_banner.setVisible(False)
             layout.addWidget(self.demo_banner)
 
-            workspace_group = QGroupBox("Workspace && Processing")
-            workspace_group.setMinimumHeight(380)
-            form = QGridLayout(workspace_group)
-            form.setHorizontalSpacing(10)
-            form.setVerticalSpacing(8)
-            form.setColumnStretch(1, 1)
-            defaults = [INPUT_DIR, OUTPUT_DIR, REVIEW_DIR, ERROR_DIR, LOG_DIR]
-            labels = ["Incoming Folder", "Completed", "NeedsReview", "Error", "Logs"]
+            default_paths = (INPUT_DIR, OUTPUT_DIR, REVIEW_DIR, ERROR_DIR, LOG_DIR)
+            saved_paths = load_folder_settings(self.settings, default_paths)
             self.path_labels = []
-            for row, (name, path) in enumerate(zip(labels, defaults)):
-                display_row = row if row == 0 else row + 1
-                label = QLabel(str(path))
-                label.setObjectName("pathValue")
-                label.setMinimumHeight(30)
-                label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-                choose = QPushButton("Choose Folder…" if row == 0 else "Choose…")
-                choose.setMinimumHeight(30)
-                choose.clicked.connect(lambda checked=False, i=row: self.choose_folder(i))
-                open_button = QPushButton("Open in Finder")
-                open_button.setMinimumHeight(30)
-                open_button.clicked.connect(lambda checked=False, i=row: self.open_folder(i))
-                form.addWidget(QLabel(name), display_row, 0)
-                form.addWidget(label, display_row, 1)
-                form.addWidget(choose, display_row, 2)
-                form.addWidget(open_button, display_row, 3)
-                self.path_labels.append(label)
-            selection_help = QLabel(
-                "Select specific images, or leave the selection empty to process all "
-                "supported images in the Incoming folder."
+
+            def add_folder_row(parent_layout, row, index, title_text):
+                path_label = QLabel(str(saved_paths[index]))
+                path_label.setObjectName("pathValue")
+                path_label.setMinimumHeight(30)
+                path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+                choose = QPushButton("Choose…")
+                choose.clicked.connect(
+                    lambda checked=False, i=index: self.choose_folder(i)
+                )
+                open_button = QPushButton("Open")
+                open_button.clicked.connect(
+                    lambda checked=False, i=index: self.open_folder(i)
+                )
+                parent_layout.addWidget(QLabel(title_text), row, 0)
+                parent_layout.addWidget(path_label, row, 1)
+                parent_layout.addWidget(choose, row, 2)
+                parent_layout.addWidget(open_button, row, 3)
+                return path_label
+
+            job_group = QGroupBox("Job Setup")
+            job_layout = QGridLayout(job_group)
+            job_layout.setColumnStretch(1, 1)
+            self.path_labels.append(
+                add_folder_row(job_layout, 0, 0, "Incoming Folder")
             )
-            selection_help.setObjectName("hintText")
-            selection_help.setWordWrap(True)
-            form.addWidget(selection_help, 1, 1, 1, 3)
-            self.model_label = QLabel(MODEL)
+            self.path_labels.append(
+                add_folder_row(job_layout, 1, 1, "Completed Folder")
+            )
+
             self.quality = QComboBox()
-            self.quality.setMinimumHeight(30)
             self.quality.addItems(["Low", "Medium"])
             self.quality.setCurrentText("Low")
-            form.addWidget(QLabel("Model"), 6, 0)
-            form.addWidget(self.model_label, 6, 1)
-            form.addWidget(QLabel("Quality"), 6, 2)
-            form.addWidget(self.quality, 6, 3)
-            self.api_key_status = QLabel()
-            self.open_env_button = QPushButton("Open .env")
-            self.open_env_button.setMinimumHeight(30)
-            self.open_env_button.clicked.connect(self.open_env)
-            self.reload_key_button = QPushButton("Reload API Key")
-            self.reload_key_button.setMinimumHeight(30)
-            self.reload_key_button.clicked.connect(self.reload_api_key)
-            form.addWidget(QLabel("API Key"), 7, 0)
-            form.addWidget(self.api_key_status, 7, 1)
-            form.addWidget(self.open_env_button, 7, 2)
-            form.addWidget(self.reload_key_button, 7, 3)
             self.demo_checkbox = QCheckBox("Demo Mode — No API Charges")
             self.demo_checkbox.toggled.connect(self.on_demo_toggled)
-            self.demo_result = QComboBox()
-            self.demo_result.addItems(
-                ["All Pass", "Some Need Review", "Include Error"]
-            )
-            self.demo_result.setEnabled(False)
-            form.addWidget(QLabel("Mode"), 8, 0)
-            form.addWidget(self.demo_checkbox, 8, 1)
-            form.addWidget(QLabel("Demo Results"), 8, 2)
-            form.addWidget(self.demo_result, 8, 3)
-            layout.addWidget(workspace_group)
+            self.architecture_lock = QCheckBox("Conservative Architecture Lock")
+            self.architecture_lock.setChecked(True)
+            self.architecture_lock.setEnabled(False)
+            job_layout.addWidget(QLabel("Quality"), 2, 0)
+            job_layout.addWidget(self.quality, 2, 1)
+            job_layout.addWidget(self.demo_checkbox, 2, 2, 1, 2)
+            job_layout.addWidget(self.architecture_lock, 3, 1, 1, 3)
 
-            selection_group = QGroupBox("Image Selection")
+            self.images_found = QLabel("0")
+            self.images_selected = QLabel("0")
+            self.cost = QLabel("$0.00")
+            for value_label in (self.images_found, self.images_selected, self.cost):
+                value_label.setObjectName("metricValue")
+            job_layout.addWidget(QLabel("Images Found"), 4, 0)
+            job_layout.addWidget(self.images_found, 4, 1)
+            job_layout.addWidget(QLabel("Images Selected"), 4, 2)
+            job_layout.addWidget(self.images_selected, 4, 3)
+            job_layout.addWidget(QLabel("Estimated Cost"), 5, 0)
+            job_layout.addWidget(self.cost, 5, 1)
+            self.demo_result = QComboBox()
+            self.demo_result.addItems(["All Pass", "Some Need Review", "Include Error"])
+            self.demo_result.setEnabled(False)
+            job_layout.addWidget(QLabel("Demo Results"), 5, 2)
+            job_layout.addWidget(self.demo_result, 5, 3)
+            self.folder_validation = QLabel()
+            self.folder_validation.setWordWrap(True)
+            self.folder_validation.setStyleSheet("color: #b42318;")
+            job_layout.addWidget(self.folder_validation, 6, 0, 1, 4)
+            layout.addWidget(job_group)
+
+            self.advanced_group = QGroupBox("Advanced Folders")
+            self.advanced_group.setCheckable(True)
+            advanced_layout = QVBoxLayout(self.advanced_group)
+            self.advanced_content = QWidget()
+            advanced_grid = QGridLayout(self.advanced_content)
+            advanced_grid.setContentsMargins(0, 0, 0, 0)
+            advanced_grid.setColumnStretch(1, 1)
+            for row, (index, title_text) in enumerate(
+                ((2, "NeedsReview"), (3, "Error"), (4, "Logs"))
+            ):
+                self.path_labels.append(
+                    add_folder_row(advanced_grid, row, index, title_text)
+                )
+            self.model_label = QLabel(MODEL)
+            self.open_env_button = QPushButton("Open .env")
+            self.open_env_button.clicked.connect(self.open_env)
+            self.reload_key_button = QPushButton("Reload API Key")
+            self.reload_key_button.clicked.connect(self.reload_api_key)
+            advanced_grid.addWidget(QLabel("Model"), 3, 0)
+            advanced_grid.addWidget(self.model_label, 3, 1)
+            advanced_grid.addWidget(self.open_env_button, 3, 2)
+            advanced_grid.addWidget(self.reload_key_button, 3, 3)
+            advanced_layout.addWidget(self.advanced_content)
+            advanced_expanded = load_boolean_setting(
+                self.settings, ADVANCED_FOLDERS_SETTING, False
+            )
+            self.advanced_group.setChecked(advanced_expanded)
+            self.advanced_content.setVisible(advanced_expanded)
+            self.advanced_group.toggled.connect(self.on_advanced_toggled)
+            layout.addWidget(self.advanced_group)
+
+            selection_group = QGroupBox("Images")
             selection_layout = QVBoxLayout(selection_group)
-            selection_layout.setSpacing(9)
             selection_actions = QHBoxLayout()
             for text, handler in (
-                ("Select Images…", self.select_images),
                 ("Select All", self.select_all),
-                ("Clear Selection", self.clear_selection),
+                ("Clear All", self.clear_selection),
+                ("Rescan Folder", self.rescan_folder),
+                ("Analyze", self.analyze),
             ):
                 button = QPushButton(text)
-                if text == "Select Images…":
-                    button.setObjectName("primaryButton")
                 button.clicked.connect(handler)
                 selection_actions.addWidget(button)
             selection_actions.addStretch(1)
             selection_layout.addLayout(selection_actions)
-            self.selected_table = QTableWidget(0, 3)
+            self.selected_table = QTableWidget(0, 5)
             self.selected_table.setHorizontalHeaderLabels(
-                ["Filename", "File Size", "Selection Status"]
+                ["", "Filename", "File Size", "Dimensions", "Status"]
             )
             self.selected_table.horizontalHeader().setStretchLastSection(True)
             self.selected_table.setAlternatingRowColors(True)
             self.selected_table.setShowGrid(False)
-            self.selected_table.setMinimumHeight(125)
-            self.selected_table.setMaximumHeight(155)
-            self.selected_table.setColumnWidth(0, 320)
-            self.selected_table.setColumnWidth(1, 120)
+            self.selected_table.setMinimumHeight(320)
+            self.selected_table.setColumnWidth(0, 44)
+            self.selected_table.setColumnWidth(1, 310)
+            self.selected_table.setColumnWidth(2, 110)
+            self.selected_table.setColumnWidth(3, 130)
+            self.selected_table.itemChanged.connect(self.on_table_item_changed)
             selection_layout.addWidget(self.selected_table)
-            layout.addWidget(selection_group)
+            layout.addWidget(selection_group, 1)
 
-            def metric_card(caption, value_label):
-                card = QFrame()
-                card.setObjectName("metricCard")
-                card_layout = QVBoxLayout(card)
-                card_layout.setContentsMargins(13, 10, 13, 10)
-                card_layout.setSpacing(3)
-                caption_label = QLabel(caption.upper())
-                caption_label.setObjectName("metricCaption")
-                value_label.setObjectName("metricValue")
-                value_label.setWordWrap(True)
-                card_layout.addWidget(caption_label)
-                card_layout.addWidget(value_label)
-                return card
-
-            stats = QGridLayout()
-            stats.setHorizontalSpacing(10)
-            self.image_count = QLabel("Images: 0")
-            self.cost = QLabel("Estimated cost: $0.00")
-            self.current = QLabel("Current: —")
-            self.counts = QLabel("Completed: 0   NeedsReview: 0   Error: 0")
-            stats.addWidget(metric_card("Batch", self.image_count), 0, 0)
-            stats.addWidget(metric_card("Estimated cost", self.cost), 0, 1)
-            stats.addWidget(metric_card("Current image", self.current), 0, 2)
-            stats.addWidget(metric_card("Results", self.counts), 0, 3)
-            for column in range(4):
-                stats.setColumnStretch(column, 1)
-            layout.addLayout(stats)
-            self.progress = QProgressBar()
-            self.progress.setTextVisible(False)
-            layout.addWidget(self.progress)
-            actions = QHBoxLayout()
-            actions.setSpacing(9)
-            for text, handler in (
-                ("Analyze", self.analyze),
-                ("Start Processing", self.start),
-                ("Cancel", self.cancel),
-                ("Review Images", self.open_review),
-            ):
-                button = QPushButton(text)
-                if text == "Start Processing":
-                    button.setObjectName("primaryButton")
-                elif text == "Cancel":
-                    button.setObjectName("dangerButton")
-                elif text == "Review Images":
-                    button.setObjectName("reviewButton")
-                button.clicked.connect(handler)
-                actions.addWidget(button)
-                if text == "Start Processing":
-                    self.start_button = button
-                elif text == "Cancel":
-                    self.cancel_button = button
-            actions.addStretch(1)
-            self.cancel_button.setEnabled(False)
-            layout.addLayout(actions)
-
-            activity_group = QGroupBox("Processing Activity")
+            activity_group = QGroupBox("Activity")
             activity_layout = QVBoxLayout(activity_group)
             self.log = QPlainTextEdit()
             self.log.setReadOnly(True)
-            self.log.setPlaceholderText("Processing updates and per-image results will appear here.")
-            self.log.setMinimumHeight(120)
+            self.log.setPlaceholderText("Batch activity will appear here.")
+            self.log.setMaximumHeight(125)
             activity_layout.addWidget(self.log)
-            layout.addWidget(activity_group, 1)
+            layout.addWidget(activity_group)
+
+            footer = QFrame()
+            footer.setObjectName("metricCard")
+            footer_layout = QVBoxLayout(footer)
+            footer_layout.setContentsMargins(16, 12, 16, 12)
+            self.progress = QProgressBar()
+            self.progress.setTextVisible(False)
+            footer_layout.addWidget(self.progress)
+            footer_status = QHBoxLayout()
+            self.current = QLabel("Current: —")
+            self.counts = QLabel("Completed: 0   NeedsReview: 0   Error: 0")
+            footer_status.addWidget(self.current, 1)
+            footer_status.addWidget(self.counts)
+            footer_layout.addLayout(footer_status)
+            footer_actions = QHBoxLayout()
+            self.start_button = QPushButton("Start Processing")
+            self.start_button.setObjectName("primaryButton")
+            self.start_button.clicked.connect(self.start)
+            self.cancel_button = QPushButton("Cancel")
+            self.cancel_button.setObjectName("dangerButton")
+            self.cancel_button.clicked.connect(self.cancel)
+            self.cancel_button.setEnabled(False)
+            self.review_button = QPushButton("Review Results")
+            self.review_button.setObjectName("reviewButton")
+            self.review_button.clicked.connect(self.open_review)
+            footer_actions.addWidget(self.start_button)
+            footer_actions.addWidget(self.cancel_button)
+            footer_actions.addWidget(self.review_button)
+            footer_actions.addStretch(1)
+            footer_layout.addLayout(footer_actions)
+            root_layout.addWidget(footer)
             self.setCentralWidget(root)
             self.quality.currentTextChanged.connect(self.on_quality_changed)
             self.reload_api_key(show_error=False)
-            self.analyze()
+            self.apply_paths()
+            self.rescan_folder()
 
         def apply_paths(self):
             if self.demo_checkbox.isChecked():
@@ -2421,6 +2649,7 @@ def launch_gui() -> int:
 
         def on_demo_toggled(self, enabled):
             self.demo_banner.setVisible(enabled)
+            self.demo_status.setText(f"Demo Mode: {'On — no API calls' if enabled else 'Off'}")
             self.demo_result.setEnabled(enabled)
             self.open_env_button.setEnabled(not enabled)
             self.reload_key_button.setEnabled(not enabled)
@@ -2429,23 +2658,34 @@ def launch_gui() -> int:
             if enabled:
                 self.api_key_status.setText("Not required — Demo Mode makes no API calls.")
                 self.api_key_status.setStyleSheet("color: #7a2e0e;")
-                self.start_button.setEnabled(not self.processing_active)
                 self.log.appendPlainText("DEMO — NO API CALLS enabled.")
             else:
                 self.reload_api_key(show_error=False)
                 self.log.appendPlainText("Demo Mode disabled; real processing restored.")
             self.apply_paths()
-            self.refresh_selection_table()
             self.analyze()
 
         def choose_folder(self, index):
             chosen = QFileDialog.getExistingDirectory(self, "Choose folder", self.path_labels[index].text())
             if chosen:
                 self.path_labels[index].setText(chosen)
+                save_folder_setting(self.settings, index, Path(chosen))
                 if index == 0:
-                    self.selected_files.clear()
-                    self.refresh_selection_table()
-                self.analyze()
+                    self.rescan_folder()
+                else:
+                    self.analyze()
+
+        def on_advanced_toggled(self, expanded):
+            self.advanced_content.setVisible(expanded)
+            self.settings.setValue(ADVANCED_FOLDERS_SETTING, expanded)
+
+        def rescan_folder(self, checked=False):
+            del checked
+            self.apply_paths()
+            self.available_files = scan_supported_images(INPUT_DIR)
+            self.selected_files = set(self.available_files)
+            self.refresh_selection_table()
+            self.update_job_summary()
 
         def select_images(self):
             self.apply_paths()
@@ -2477,41 +2717,109 @@ def launch_gui() -> int:
             self.analyze()
 
         def select_all(self):
-            self.apply_paths()
-            INPUT_DIR.mkdir(parents=True, exist_ok=True)
-            self.selected_files = {
-                path.resolve()
-                for path in INPUT_DIR.iterdir()
-                if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS
-            }
+            self.selected_files = set(self.available_files)
             self.refresh_selection_table()
-            self.analyze()
+            self.update_job_summary()
 
         def clear_selection(self):
             self.selected_files.clear()
             self.refresh_selection_table()
-            self.analyze()
+            self.update_job_summary()
 
         def refresh_selection_table(self):
-            files = sorted(self.selected_files)
+            self.updating_table = True
+            files = self.available_files
             self.selected_table.setRowCount(len(files))
             for row, path in enumerate(files):
-                if not path.exists():
-                    size = "—"
-                else:
-                    size = f"{path.stat().st_size / 1_000_000:.2f} MB"
+                size = f"{path.stat().st_size / 1_000_000:.2f} MB"
+                try:
+                    with Image.open(path) as image:
+                        dimensions = f"{image.width} × {image.height}"
+                except (OSError, ValueError):
+                    dimensions = "Unreadable"
                 status = selection_status(path)
-                for column, value in enumerate((path.name, size, status)):
-                    self.selected_table.setItem(row, column, QTableWidgetItem(value))
+                if path not in self.selected_files and not status.startswith("Already"):
+                    status = "Not selected"
+                checkbox = QTableWidgetItem()
+                checkbox.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
+                checkbox.setCheckState(
+                    Qt.Checked if path in self.selected_files else Qt.Unchecked
+                )
+                checkbox.setData(Qt.UserRole, str(path))
+                self.selected_table.setItem(row, 0, checkbox)
+                for column, value in enumerate(
+                    (path.name, size, dimensions, status), start=1
+                ):
+                    item = QTableWidgetItem(value)
+                    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                    self.selected_table.setItem(row, column, item)
+            self.updating_table = False
 
-        def selected_or_all(self) -> list[Path] | None:
-            return sorted(self.selected_files) if self.selected_files else None
+        def on_table_item_changed(self, item):
+            if self.updating_table or item.column() != 0:
+                return
+            path_value = item.data(Qt.UserRole)
+            if not path_value:
+                return
+            path = Path(path_value)
+            self.selected_files = update_checked_selection(
+                self.selected_files, path, item.checkState() == Qt.Checked
+            )
+            self.update_job_summary()
+
+        def selected_or_all(self) -> list[Path]:
+            return sorted(self.selected_files)
+
+        def eligible_selected_files(self):
+            return [
+                path
+                for path in sorted(self.selected_files)
+                if path.is_file() and existing_output_destination(path.name) is None
+            ]
+
+        def update_job_summary(self):
+            self.apply_paths()
+            valid, message = validate_folder_configuration(
+                *(Path(label.text()) for label in self.path_labels[:4])
+            )
+            self.folder_configuration_valid = valid
+            eligible = self.eligible_selected_files()
+            if not valid:
+                summary_message = message
+            elif not self.selected_files:
+                summary_message = "Select at least one image to enable processing."
+            elif not eligible:
+                summary_message = (
+                    "All selected images already have outputs. Delete an output or "
+                    "select another image to process."
+                )
+            else:
+                summary_message = ""
+            self.folder_validation.setText(summary_message)
+            quality = self.quality.currentText().lower()
+            self.images_found.setText(str(len(self.available_files)))
+            self.images_selected.setText(str(len(self.selected_files)))
+            self.cost.setText(
+                f"${selected_batch_cost(eligible, quality, self.demo_checkbox.isChecked()):.2f}"
+            )
+            self.progress.setRange(0, max(1, len(eligible)))
+            self.update_start_enabled()
+
+        def update_start_enabled(self):
+            api_ready = self.demo_checkbox.isChecked() or self.api_key is not None
+            enabled = (
+                not self.processing_active
+                and self.folder_configuration_valid
+                and bool(self.eligible_selected_files())
+                and api_ready
+            )
+            self.start_button.setEnabled(enabled)
 
         def on_quality_changed(self, quality):
             global QUALITY
             QUALITY = quality.lower()
             self.log.appendPlainText(f"Quality selected: {quality}")
-            self.analyze()
+            self.update_job_summary()
 
         def open_env(self):
             env_path = APP_DIR / ".env"
@@ -2532,7 +2840,7 @@ def launch_gui() -> int:
                 self.api_key_status.setText(
                     "Not required — Demo Mode makes no API calls."
                 )
-                self.start_button.setEnabled(not self.processing_active)
+                self.update_start_enabled()
                 return True
             self.api_key, message = load_project_api_key()
             valid = self.api_key is not None
@@ -2541,7 +2849,7 @@ def launch_gui() -> int:
                 "color: #187a33;" if valid else "color: #b42318;"
             )
             if hasattr(self, "start_button"):
-                self.start_button.setEnabled(valid and not self.processing_active)
+                self.update_start_enabled()
             if valid:
                 if hasattr(self, "log"):
                     self.log.appendPlainText("API key reloaded successfully from project .env.")
@@ -2560,51 +2868,50 @@ def launch_gui() -> int:
 
         def analyze(self):
             self.apply_paths()
-            files, skipped = pending_images(self.selected_or_all())
-            quality = self.quality.currentText().lower()
-            self.image_count.setText(f"Images to process: {len(files)} (existing skipped: {skipped})")
-            estimated_cost = (
-                0.0
-                if self.demo_checkbox.isChecked()
-                else len(files) * estimated_cost_per_image(quality)
-            )
-            self.cost.setText(f"Estimated cost: ${estimated_cost:.2f}")
-            self.progress.setRange(0, max(1, len(files)))
-            self.progress.setValue(0)
+            previous = set(self.selected_files)
+            self.available_files = scan_supported_images(INPUT_DIR)
+            self.selected_files = {
+                path for path in self.available_files if path in previous
+            }
             self.refresh_selection_table()
+            self.update_job_summary()
+            self.progress.setValue(0)
+
+        def confirm_paid_processing(self, files, quality):
+            box = QMessageBox(self)
+            box.setWindowTitle("Confirm paid processing")
+            box.setIcon(QMessageBox.Warning)
+            box.setText(
+                paid_confirmation_text(
+                    len(files),
+                    quality,
+                    selected_batch_cost(files, quality, False),
+                )
+            )
+            start = box.addButton("Start Paid Processing", QMessageBox.AcceptRole)
+            box.addButton("Cancel", QMessageBox.RejectRole)
+            box.exec()
+            return box.clickedButton() is start
 
         def start(self):
             self.analyze()
             selected = self.selected_or_all()
-            files, skipped = pending_images(selected)
+            files = self.eligible_selected_files()
             quality = self.quality.currentText().lower()
             demo_mode = self.demo_checkbox.isChecked()
+            if not selected:
+                QMessageBox.information(
+                    self, "Select images", "Select at least one image to process."
+                )
+                return
             if not files:
                 QMessageBox.information(self, "Nothing to process", "No pending supported images were found.")
                 return
-            if skipped:
-                QMessageBox.information(
-                    self,
-                    "Existing outputs",
-                    f"{skipped} image(s) already exist in Completed, NeedsReview, or Error "
-                    "and will not be overwritten.",
-                )
-            answer = QMessageBox.question(
-                self,
-                "Start Demo" if demo_mode else "Confirm paid processing",
-                (
-                    f"Simulate processing {len(files)} image(s) at {quality} quality? "
-                    "No API calls will be made and cost is $0.00."
-                    if demo_mode
-                    else f"Process {len(files)} image(s) at {quality} quality? "
-                    f"Estimated cost: ${len(files) * estimated_cost_per_image(quality):.2f}."
-                ),
-            )
-            if answer != QMessageBox.Yes:
-                return
             client = None
-            if not demo_mode:
+            if requires_paid_confirmation(demo_mode):
                 if not self.reload_api_key(show_error=True):
+                    return
+                if not self.confirm_paid_processing(files, quality):
                     return
                 api_key = self.api_key
                 if api_key is None:
@@ -2616,7 +2923,7 @@ def launch_gui() -> int:
             )
             self.worker = Worker(
                 client,
-                selected,
+                files,
                 quality,
                 demo_mode=demo_mode,
                 demo_result_mode=self.demo_result.currentText(),
@@ -2629,7 +2936,7 @@ def launch_gui() -> int:
             self.thread.finished.connect(self.worker.deleteLater)
             self.thread.finished.connect(self.thread.deleteLater)
             self.processing_active = True
-            self.start_button.setEnabled(False)
+            self.update_start_enabled()
             self.cancel_button.setEnabled(True)
             self.thread.start()
 
@@ -2670,9 +2977,6 @@ def launch_gui() -> int:
 
         def on_complete(self, summary):
             self.processing_active = False
-            self.start_button.setEnabled(
-                self.demo_checkbox.isChecked() or self.api_key is not None
-            )
             self.cancel_button.setEnabled(False)
             self.current.setText("Current: —")
             self.counts.setText(
@@ -2697,6 +3001,26 @@ def launch_gui() -> int:
             )
             self.review_window.refresh_files()
             self.analyze()
+
+        def queue_retry(self, filename):
+            self.apply_paths()
+            source = (INPUT_DIR / filename).resolve()
+            self.available_files = scan_supported_images(INPUT_DIR)
+            if source not in self.available_files:
+                QMessageBox.warning(
+                    self,
+                    "Incoming image missing",
+                    f"{filename} is not present in the Incoming folder.",
+                )
+                return
+            self.selected_files = {source}
+            self.refresh_selection_table()
+            self.update_job_summary()
+            self.log.appendPlainText(
+                f"Retry queued for {filename}. Review the quality and cost, then click Start Processing."
+            )
+            self.show()
+            self.raise_()
 
         def open_review(self):
             self.apply_paths()

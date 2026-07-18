@@ -138,9 +138,137 @@ def test_external_production_prompt_preserves_baseline_and_adds_architectural_fi
     )
 
 
-def test_application_version_uses_single_v2_release_candidate_constant(app_module):
-    assert app_module.PROGRAM_VERSION == "2.0 RC1"
-    assert app_module.PROMPT_VERSION == app_module.PROGRAM_VERSION
+def test_application_and_prompt_versions_are_independent(app_module):
+    assert app_module.PROGRAM_VERSION == "2.1 RC1"
+    assert app_module.PROMPT_VERSION == "2.0 RC1"
+
+
+def test_folder_scan_auto_loads_supported_images(tmp_path, app_module):
+    incoming = tmp_path / "Incoming"
+    incoming.mkdir()
+    textured_image().save(incoming / "one.jpg", format="JPEG")
+    textured_image().save(incoming / "two.png", format="PNG")
+    (incoming / "notes.txt").write_text("ignore", encoding="utf-8")
+
+    found = app_module.scan_supported_images(incoming)
+
+    assert [path.name for path in found] == ["one.jpg", "two.png"]
+    assert set(found) == set(found)  # the GUI's initial checked selection
+
+
+def test_checked_selection_drives_count_and_cost(app_module):
+    files = [Path("one.jpg"), Path("two.jpg")]
+    low = app_module.selected_batch_cost(files[:1], "low", False)
+    medium = app_module.selected_batch_cost(files, "medium", False)
+
+    assert low == app_module.LOW_ESTIMATED_COST_PER_IMAGE
+    assert medium == 2 * app_module.OBSERVED_ESTIMATED_COST_PER_IMAGE
+    assert app_module.selected_batch_cost(files, "medium", True) == 0.0
+    assert app_module.selected_batch_cost([], "medium", False) == 0.0
+
+
+def test_individual_check_uncheck_and_single_selection(app_module):
+    first = Path("one.jpg")
+    second = Path("two.jpg")
+    selected = {first, second}
+
+    selected = app_module.update_checked_selection(selected, second, False)
+    assert selected == {first}
+    selected = app_module.update_checked_selection(selected, first, False)
+    assert selected == set()
+    selected = app_module.update_checked_selection(selected, second, True)
+    assert selected == {second}
+
+
+def test_paid_confirmation_is_bypassed_in_demo_mode(app_module):
+    assert app_module.requires_paid_confirmation(False)
+    assert not app_module.requires_paid_confirmation(True)
+
+
+@pytest.mark.parametrize(
+    "paths, expected_names",
+    [
+        (("same", "same", "review", "error"), ("Incoming", "Completed")),
+        (("incoming", "completed", "same", "same"), ("NeedsReview", "Error")),
+        (("incoming", "same", "same", "error"), ("Completed", "NeedsReview")),
+    ],
+)
+def test_folder_conflicts_are_rejected(tmp_path, app_module, paths, expected_names):
+    valid, message = app_module.validate_folder_configuration(
+        *(tmp_path / name for name in paths)
+    )
+    assert not valid
+    assert all(name in message for name in expected_names)
+
+
+def test_distinct_folder_configuration_is_valid(tmp_path, app_module):
+    valid, message = app_module.validate_folder_configuration(
+        *(tmp_path / name for name in ("Incoming", "Completed", "Review", "Error"))
+    )
+    assert valid
+    assert "valid" in message.lower()
+
+
+def test_folder_paths_and_advanced_state_are_remembered(tmp_path, app_module):
+    class Settings:
+        def __init__(self):
+            self.values = {}
+
+        def value(self, key, default=None):
+            return self.values.get(key, default)
+
+        def setValue(self, key, value):
+            self.values[key] = value
+
+    settings = Settings()
+    defaults = tuple(tmp_path / name for name in ("a", "b", "c", "d", "e"))
+    changed = tmp_path / "chosen"
+    app_module.save_folder_setting(settings, 2, changed)
+    settings.setValue(app_module.ADVANCED_FOLDERS_SETTING, True)
+
+    loaded = app_module.load_folder_settings(settings, defaults)
+    assert loaded[2] == changed
+    assert loaded[0] == defaults[0]
+    assert app_module.load_boolean_setting(
+        settings, app_module.ADVANCED_FOLDERS_SETTING
+    )
+
+
+def test_paid_confirmation_summarizes_only_checked_images(app_module):
+    text = app_module.paid_confirmation_text(2, "medium", 0.32)
+    assert "Images: 2" in text
+    assert "Quality: Medium" in text
+    assert "Estimated cost: $0.32" in text
+    assert "Demo Mode: Off" in text
+    assert "Prompt: MLS Production v2.0 RC1" in text
+
+
+def test_retry_confirmation_queues_without_claiming_to_start(app_module):
+    text = app_module.retry_confirmation_text("Kitchen.jpg", "low")
+    assert "Kitchen.jpg" in text
+    assert "Quality: Low" in text
+    assert "Estimated additional cost:" in text
+    assert "will not start automatically" in text
+
+
+def test_review_actions_move_accept_and_delete_outputs(tmp_path, app_module):
+    configure_tmp(app_module, tmp_path)
+    app_module.initialize_history_db()
+    completed = app_module.OUTPUT_DIR / "room.jpg"
+    completed.write_bytes(b"result")
+
+    moved = app_module.move_output_to_review(completed.name)
+    assert moved == app_module.REVIEW_DIR / completed.name
+    assert moved.exists()
+    assert not completed.exists()
+
+    accepted = app_module.accept_review_output(moved.name)
+    assert accepted == completed
+    assert completed.exists()
+    assert not moved.exists()
+
+    app_module.delete_active_output(completed.name)
+    assert not completed.exists()
 
 
 def test_env_overrides_stale_shell_key_and_reload(tmp_path, monkeypatch, app_module):
