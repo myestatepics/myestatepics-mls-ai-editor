@@ -32,6 +32,8 @@ Archive/
 *.tmp
 dist/
 build/
+*.spec
+*.dmg
 *.egg-info/
 
 .venv/

@@ -28,9 +28,12 @@ Important:
 """
 
 import base64
+import atexit
 import csv
+import logging
 import os
 import sqlite3
+import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -44,9 +47,43 @@ from PIL import Image, ImageFilter
 from dotenv import load_dotenv
 
 
+APPLICATION_NAME = "MyEstatePics AI Editor"
+IS_PACKAGED = bool(getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"))
+
+
+def resource_path(relative_path: str | Path) -> Path:
+    """Locate bundled read-only resources in development and PyInstaller builds."""
+    root = (
+        Path(getattr(sys, "_MEIPASS"))
+        if IS_PACKAGED
+        else Path(__file__).resolve().parent
+    )
+    return root / Path(relative_path)
+
+
+def application_data_dir() -> Path:
+    """Return the writable macOS Application Support directory for packaged data."""
+    path = Path.home() / "Library" / "Application Support" / APPLICATION_NAME
+    for directory in (
+        path,
+        path / "Logs",
+        path / "Cache",
+        path / "runtime" / "Incoming",
+        path / "runtime" / "Completed",
+        path / "runtime" / "NeedsReview",
+        path / "runtime" / "Error",
+        path / "runtime" / "Logs",
+        path / "runtime" / "Data",
+    ):
+        directory.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 APP_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = APP_DIR
-RUNTIME_DIR = APP_DIR / "runtime"
+RESOURCE_DIR = resource_path(".")
+USER_DATA_DIR = application_data_dir()
+RUNTIME_DIR = USER_DATA_DIR / "runtime" if IS_PACKAGED else APP_DIR / "runtime"
 INPUT_DIR = RUNTIME_DIR / "Incoming"
 OUTPUT_DIR = RUNTIME_DIR / "Completed"
 REVIEW_DIR = RUNTIME_DIR / "NeedsReview"
@@ -54,7 +91,7 @@ ERROR_DIR = RUNTIME_DIR / "Error"
 LOG_DIR = RUNTIME_DIR / "Logs"
 DATA_DIR = RUNTIME_DIR / "Data"
 HISTORY_DB = DATA_DIR / "image_history.sqlite3"
-PROMPT_FILE = APP_DIR / "prompts" / "mls_production.txt"
+PROMPT_FILE = resource_path("prompts/mls_production.txt")
 
 PROGRAM_VERSION = "2.1 RC1"
 PROMPT_VERSION = "2.0 RC1"
@@ -93,6 +130,35 @@ WB_MIN_VALUE = 0.25
 WB_MAX_VALUE = 0.90
 WB_CAST_THRESHOLD = 0.025
 WB_MAX_CHANNEL_STD = 0.16
+
+
+def configure_startup_logging() -> Path:
+    """Create Finder-friendly diagnostics outside the read-only app bundle."""
+    startup_log_dir = USER_DATA_DIR / "Logs"
+    startup_log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = startup_log_dir / "application.log"
+    logging.basicConfig(
+        filename=log_path,
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        force=True,
+    )
+    logging.info("Application start: %s v%s", APPLICATION_NAME, PROGRAM_VERSION)
+    logging.info("PyInstaller environment: %s", IS_PACKAGED)
+    logging.info("Resource directory: %s", RESOURCE_DIR)
+    logging.info("User data directory: %s", USER_DATA_DIR)
+    logging.info("Prompt resource: %s", PROMPT_FILE)
+
+    def log_uncaught_exception(exception_type, exception, traceback):
+        logging.critical(
+            "Uncaught exception",
+            exc_info=(exception_type, exception, traceback),
+        )
+        sys.__excepthook__(exception_type, exception, traceback)
+
+    sys.excepthook = log_uncaught_exception
+    atexit.register(lambda: logging.info("Application exit"))
+    return log_path
 
 
 @dataclass
@@ -136,7 +202,8 @@ def validate_api_key(api_key: str | None) -> tuple[bool, str]:
 
 def load_project_api_key() -> tuple[str | None, str]:
     """Reload the application-local .env and override stale shell values."""
-    load_dotenv(dotenv_path=APP_DIR / ".env", override=True)
+    env_path = USER_DATA_DIR / ".env" if IS_PACKAGED else APP_DIR / ".env"
+    load_dotenv(dotenv_path=env_path, override=True)
     api_key = os.getenv("OPENAI_API_KEY")
     valid, message = validate_api_key(api_key)
     return (api_key.strip() if valid and api_key else None), message
@@ -1513,7 +1580,11 @@ def configure_runtime_paths(
 
 def demo_runtime_paths() -> tuple[Path, Path, Path, Path, Path]:
     """Return isolated demo destinations rooted beside the application."""
-    demo_root = APP_DIR / "runtime" / "Demo"
+    demo_root = (
+        USER_DATA_DIR / "runtime" / "Demo"
+        if IS_PACKAGED
+        else APP_DIR / "runtime" / "Demo"
+    )
     return (
         demo_root / "Completed",
         demo_root / "NeedsReview",
@@ -2416,7 +2487,9 @@ def launch_gui() -> int:
             self.available_files: list[Path] = []
             self.updating_table = False
             self.folder_configuration_valid = True
-            self.settings = QSettings("MyEstatePics", "AIEditor")
+            self.settings = QSettings(
+                str(USER_DATA_DIR / "preferences.ini"), QSettings.IniFormat
+            )
             self.review_window = ReviewWindow(self)
             self.review_window.reprocess.connect(self.queue_retry)
             root = QWidget()
@@ -2640,6 +2713,17 @@ def launch_gui() -> int:
             self.reload_api_key(show_error=False)
             self.apply_paths()
             self.rescan_folder()
+            saved_size = self.settings.value("ui/window_size")
+            if saved_size is not None:
+                self.resize(saved_size)
+            if load_boolean_setting(self.settings, "ui/demo_mode", False):
+                self.demo_checkbox.setChecked(True)
+
+        def closeEvent(self, event):
+            self.settings.setValue("ui/window_size", self.size())
+            self.settings.setValue("ui/demo_mode", self.demo_checkbox.isChecked())
+            self.settings.sync()
+            super().closeEvent(event)
 
         def apply_paths(self):
             if self.demo_checkbox.isChecked():
@@ -2822,14 +2906,14 @@ def launch_gui() -> int:
             self.update_job_summary()
 
         def open_env(self):
-            env_path = APP_DIR / ".env"
+            env_path = USER_DATA_DIR / ".env" if IS_PACKAGED else APP_DIR / ".env"
             if not env_path.exists():
                 QMessageBox.warning(
                     self,
-                    "Project .env not found",
-                    "Create .env in the application folder, then click Reload API Key.",
+                    ".env not found",
+                    f"Create .env in {env_path.parent}, then click Reload API Key.",
                 )
-                QDesktopServices.openUrl(QUrl.fromLocalFile(str(APP_DIR)))
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(env_path.parent)))
                 return
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(env_path)))
 
@@ -3038,4 +3122,5 @@ def launch_gui() -> int:
 
 
 if __name__ == "__main__":
+    configure_startup_logging()
     raise SystemExit(launch_gui())
