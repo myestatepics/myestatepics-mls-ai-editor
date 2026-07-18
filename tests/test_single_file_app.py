@@ -52,7 +52,7 @@ def configure_tmp(module, tmp_path):
         tmp_path / "Error",
         tmp_path / "Logs",
     )
-    module.PROMPT_FILE = ROOT / "legacy" / "myestatepics_mls_interior_prompt_v1_6.txt"
+    module.PROMPT_FILE = ROOT / "prompts" / "mls_production.txt"
     for directory in (
         module.INPUT_DIR,
         module.OUTPUT_DIR,
@@ -82,6 +82,11 @@ def test_mocked_end_to_end_preserves_filename_jpeg_limit_and_exif(tmp_path, app_
             assert kwargs["model"] == "gpt-image-2"
             assert kwargs["quality"] == "low"
             assert kwargs["output_format"] == "png"
+            assert "Never create windows inside mirror reflections." in kwargs["prompt"]
+            assert (
+                "Never transform blank walls or bright regions into windows or openings."
+                in kwargs["prompt"]
+            )
             return response
 
     summary = app_module.process_batch(SimpleNamespace(images=Images()))
@@ -108,6 +113,34 @@ def test_mocked_end_to_end_preserves_filename_jpeg_limit_and_exif(tmp_path, app_
     assert row["destination"] == str(app_module.OUTPUT_DIR)
     assert row["needs_review_reason"] == ""
     assert app_module.HISTORY_DB.exists()
+
+
+def test_external_production_prompt_preserves_baseline_and_adds_architectural_fidelity(
+    app_module,
+):
+    external_prompt = ROOT / "prompts" / "mls_production.txt"
+    legacy_prompt = (
+        ROOT / "legacy" / "myestatepics_mls_interior_prompt_v1_6.txt"
+    ).read_text(encoding="utf-8").strip()
+
+    assert app_module.PROMPT_FILE == external_prompt
+    loaded_prompt = app_module.load_prompt()
+    assert loaded_prompt.startswith(legacy_prompt)
+    assert loaded_prompt[len(legacy_prompt) :].startswith(
+        "\n\nARCHITECTURAL FIDELITY"
+    )
+    assert "Mirror reflections must remain physically accurate" in loaded_prompt
+    assert "Never create windows inside mirror reflections." in loaded_prompt
+    assert "Never invent architecture that does not exist." in loaded_prompt
+    assert (
+        "Never transform blank walls or bright regions into windows or openings."
+        in loaded_prompt
+    )
+
+
+def test_application_version_uses_single_v2_release_candidate_constant(app_module):
+    assert app_module.PROGRAM_VERSION == "2.0 RC1"
+    assert app_module.PROMPT_VERSION == app_module.PROGRAM_VERSION
 
 
 def test_env_overrides_stale_shell_key_and_reload(tmp_path, monkeypatch, app_module):

@@ -1,5 +1,5 @@
 """
-MyEstatePics MLS Interior Batch Editor — Production v1.6
+MyEstatePics MLS Interior Batch Editor — Production v2.0 RC1
 
 Workflow:
     Incoming/*.jpg or *.jpeg
@@ -54,10 +54,10 @@ ERROR_DIR = RUNTIME_DIR / "Error"
 LOG_DIR = RUNTIME_DIR / "Logs"
 DATA_DIR = RUNTIME_DIR / "Data"
 HISTORY_DB = DATA_DIR / "image_history.sqlite3"
-PROMPT_FILE = APP_DIR / "legacy" / "myestatepics_mls_interior_prompt_v1_6.txt"
+PROMPT_FILE = APP_DIR / "prompts" / "mls_production.txt"
 
-PROGRAM_VERSION = "1.6"
-PROMPT_VERSION = "1.6"
+PROGRAM_VERSION = "2.0 RC1"
+PROMPT_VERSION = PROGRAM_VERSION
 MODEL = "gpt-image-2"
 QUALITY = "low"
 QUALITY_OPTIONS = ("low", "medium")
