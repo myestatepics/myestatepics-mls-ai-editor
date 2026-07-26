@@ -1,83 +1,152 @@
 # MyEstatePics AI Editor
 
-MyEstatePics AI Editor is a PySide6 desktop application for conservative,
-batch-oriented enhancement of interior real-estate photographs. Production
-v2.1 RC1 uses the externally stored MLS production prompt v2.0 RC1 and the
-OpenAI image editing API. The original images remain in place, output filenames
-are preserved, and deterministic checks route results to Completed,
-NeedsReview, or Error.
+MyEstatePics AI Editor is a macOS PySide6 desktop application for conservative,
+batch-oriented enhancement of real-estate photographs. The frozen production
+baseline is the **Direct** edition on branch
+`restore/direct-image-edit-production`. It sends each image directly to
+OpenAI's Images Edit endpoint using `gpt-image-2`; it does not use the Responses
+API or GPT-5.6.
 
-## Features
+The source photograph remains untouched. A successful result is exported as a
+JPEG with the original filename and routed to `Completed` or `NeedsReview`.
+Errors are recorded separately. The production prompt prioritizes architectural
+and material fidelity, existing-window-only edits, natural MLS window pulls,
+and protection of mirrors and reflections.
 
-- macOS desktop interface with source and standalone `.app` launch modes
-- automatic Incoming-folder scan and default selection of supported images
-- individual image selection, Low and Medium quality, and cost estimation
-- paid-production confirmation and isolated no-cost Demo Mode
-- conservative prompt with architectural and material fidelity safeguards
-- deterministic output verification and explicit NeedsReview reasons
-- JPEG export with preserved safe EXIF, normalized orientation, and a 2 MB goal
-- CSV run logs and SQLite learning history
-- side-by-side review with Accept, Move to Needs Review, Retry, and Delete
-- portable PyInstaller app and optional DMG build
+## Production status
 
-The current DMG is an internal, architecture-specific, ad-hoc-signed release
-candidate. It is not a universal, Developer ID-signed, or notarized public
-installer. Supported input formats are `.jpg`, `.jpeg`, and `.png`.
+- Production source baseline before this documentation freeze:
+  `b5b6b231d626551198f5e440f0faa4be99d03020`
+- Application badge: `Production v2.1 RC1`
+- Prompt badge: `Prompt v2.0 RC1`
+- Production model: `gpt-image-2`
+- Production endpoint: `/v1/images/edits`
+- API requests: one direct image-edit request per successful image; a genuine
+  transient failure can retry the same request
+- Current installer: internal Apple Silicon, ad-hoc-signed build; it is not
+  notarized for public distribution
 
-## Screenshots
+The application reports estimated costs. The OpenAI dashboard is the authority
+for actual charges.
 
-Screenshots are intentionally not committed yet. Future release documentation
-should add:
+## Install the Direct application
 
-- main batch window
-- Demo Mode banner and result controls
-- side-by-side Review Results window
+1. Open `MyEstatePics AI Editor - Direct.dmg`.
+2. Drag **MyEstatePics AI Editor - Direct** to **Applications**.
+3. On first launch, Control-click the application, choose **Open**, and confirm
+   **Open** if macOS warns that the developer cannot be verified.
+4. Add the API key to:
 
-## Quick start
+   ```text
+   ~/Library/Application Support/MyEstatePics AI Editor - Direct/.env
+   ```
+
+   using:
+
+   ```text
+   OPENAI_API_KEY=sk-your-key
+   ```
+
+The Direct edition uses a separate Application Support directory, so it can
+remain installed beside the earlier application. On its first launch only, it
+can copy an existing `.env` from
+`~/Library/Application Support/MyEstatePics AI Editor/.env`; the original file
+is never moved, edited, or deleted.
+
+## Launch from source
 
 Development requires macOS, Python 3.11 or newer, and the dependencies in
 `requirements.txt`.
 
 ```bash
 python3 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip
 .venv/bin/python -m pip install -r requirements.txt
 .venv/bin/python myestatepics_ai_editor.py
 ```
 
-Source execution reads `.env` from the repository root. The packaged app reads
-`.env` from:
+Source execution reads `.env` from the repository root. The API key is never
+bundled, displayed, or written to logs. Demo Mode works without a key and makes
+no API calls.
+
+## Low and Medium quality
+
+The **Quality** selector supports:
+
+- **Low** — default and lower estimated cost
+- **Medium** — sends `quality="medium"` to the same direct Images Edit request
+
+Changing quality updates the estimate immediately. The selected value is
+included in logs and the batch summary. Always confirm current OpenAI pricing
+and validate actual cost in the OpenAI dashboard before a large production
+batch.
+
+## Basic usage
+
+1. Choose the Incoming and Completed folders.
+2. Review the automatically selected supported `.jpg`, `.jpeg`, and `.png`
+   images. Uncheck any image that should not run.
+3. Select **Low** or **Medium**.
+4. Use **Analyze** to refresh eligibility and estimated cost.
+5. Click **Start Processing**, review the paid-processing confirmation, and
+   approve it.
+6. Use **Review Results** for files routed to `NeedsReview`.
+
+An image is eligible again when no same-named output exists in the active
+`Completed`, `NeedsReview`, or `Error` result folder. Historical CSV and SQLite
+records do not block reprocessing.
+
+**Cancel** is cooperative: it keeps the GUI responsive, lets the current HTTP
+request finish naturally, preserves any completed output, and prevents the
+next queued image from starting.
+
+## Data and logs
+
+The packaged Direct application stores its private configuration and default
+runtime data under:
 
 ```text
-~/Library/Application Support/MyEstatePics AI Editor/.env
+~/Library/Application Support/MyEstatePics AI Editor - Direct/
+├── .env
+├── preferences.ini
+├── Logs/application.log
+└── runtime/
+    ├── Incoming/
+    ├── Completed/
+    ├── NeedsReview/
+    ├── Error/
+    ├── Logs/
+    └── Data/image_history.sqlite3
 ```
 
-The required format is `OPENAI_API_KEY=sk-...`. The key is never bundled,
-displayed, or written to logs.
+User-selected Incoming and Completed folders may be elsewhere. Source mode
+uses the repository `runtime/` directory for processing data and Application
+Support for startup diagnostics and preferences.
 
-## Architecture
+## Build and test
 
-The application is intentionally implemented in
-`myestatepics_ai_editor.py`. It contains configuration, analysis, API
-integration, verification, persistence, Demo Mode, and the PySide6 GUI. The
-read-only production prompt is loaded from `prompts/mls_production.txt`.
-Writable packaged data is stored in macOS Application Support.
+See [Build and Release](docs/BUILD_RELEASE.md) for the exact Direct-edition
+build, signing, DMG, checksum, and clean-rebuild procedure.
 
-Folder scans are event-driven, not continuous: the application scans when a
-folder is selected or restored, when Rescan/Analyze is used, and after a batch.
-
-See [Technical Design](docs/TECHNICAL_DESIGN.md) for component and data-flow
-details.
-
-## Build
+Offline validation:
 
 ```bash
-./build_macos.sh
-./build_dmg.sh
+python3 -m py_compile myestatepics_ai_editor.py
+pytest -q
+git diff --check
 ```
 
-Outputs are created under `dist/`. See [Build Guide](docs/BUILD_GUIDE.md).
+Tests use mocks and Demo Mode and make no paid API calls.
 
-## Documentation
+## Production documentation
+
+- [Architecture](docs/ARCHITECTURE.md)
+- [Prompt Guide](docs/PROMPT_GUIDE.md)
+- [Build and Release](docs/BUILD_RELEASE.md)
+- [Test Plan](docs/TEST_PLAN.md)
+- [Changelog](CHANGELOG.md)
+
+Additional engineering references:
 
 - [Product Requirements](docs/PRODUCT_REQUIREMENTS.md)
 - [Technical Design](docs/TECHNICAL_DESIGN.md)
@@ -87,31 +156,12 @@ Outputs are created under `dist/`. See [Build Guide](docs/BUILD_GUIDE.md).
 - [Build Guide](docs/BUILD_GUIDE.md)
 - [Release Process](docs/RELEASE_PROCESS.md)
 - [Roadmap](docs/ROADMAP.md)
-- [Changelog](docs/CHANGELOG.md)
+- [Historical Changelog](docs/CHANGELOG.md)
 - [Production Readiness Audit](production_audit.md)
 - [Legacy v1.6 Baseline](docs/legacy-v1.6-baseline.md)
 - [ADR Index](docs/adr/README.md)
-- [ADR-001: Application Support Storage](docs/adr/ADR-001-application-support-storage.md)
-- [ADR-002: Portable macOS Packaging](docs/adr/ADR-002-portable-macos-packaging.md)
-- [ADR-003: Architectural Geometry Lock](docs/adr/ADR-003-architectural-geometry-lock.md)
-- [ADR-004: Prompt Externalization](docs/adr/ADR-004-prompt-externalization.md)
-- [ADR-005: Demo Mode](docs/adr/ADR-005-demo-mode.md)
-- [Detailed macOS Build Notes](BUILD_MAC.md)
-
-## Tests
-
-Tests use mocks and Demo Mode; they do not make paid API calls.
-
-```bash
-python3 -m py_compile myestatepics_ai_editor.py
-pytest -q
-```
 
 ## License
 
-License terms have not yet been selected. Add an approved `LICENSE` file before
-external distribution.
-
-## Roadmap
-
-Planned engineering work is maintained in [ROADMAP.md](docs/ROADMAP.md).
+License terms have not been selected. Add an approved `LICENSE` before external
+distribution.
