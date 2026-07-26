@@ -1,6 +1,6 @@
 # Production Readiness Audit
 
-**Application:** MyEstatePics AI Editor, Production v2.1 RC1  
+**Application:** MyEstatePics AI Editor, Production v1.0.0
 **Audit scope:** entire repository at commit `deda4ac78934579b407239047c7bd079edd15d4f`  
 **Audit date:** 2026-07-18  
 **Decision:** **Not ready for unattended thousand-image production batches**
@@ -428,7 +428,8 @@ made.**
 ### PH-027 — Module header and some messages describe obsolete behavior
 
 - **Severity:** Low
-- **Description:** The source docstring still says Production v2.0 RC1,
+- **Description:** At the time of this audit, the source docstring said an
+  obsolete prerelease version and described a
   Medium-only/JPEG-only workflow, and older skip folders. The missing-prompt
   message names a legacy file.
 - **Risk:** Maintainers and support staff diagnose the wrong behavior.
@@ -508,4 +509,3 @@ The application should not be approved for thousands-image operation until:
 9. multiple instances cannot process the same job;
 10. the packaged artifact passes clean-install, missing/corrupt-resource,
     settings-corruption, and no-key Demo tests with no paid API calls.
-

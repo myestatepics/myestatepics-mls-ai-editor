@@ -8,7 +8,7 @@ measurable acceptance criteria, and rollback or migration impact.
 
 ## Current status
 
-Production v2.1 RC1 provides a portable macOS batch GUI, external production
+Production v1.0.0 provides a portable macOS batch GUI, external production
 prompt, architectural safeguards, Demo Mode, deterministic verification,
 review routing, CSV/SQLite records, and repeatable app/DMG builds.
 

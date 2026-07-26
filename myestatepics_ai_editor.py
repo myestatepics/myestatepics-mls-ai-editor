@@ -1,5 +1,5 @@
 """
-MyEstatePics MLS Interior Batch Editor — Production v2.0 RC1
+MyEstatePics MLS Interior Batch Editor — Production v1.0.0
 
 Workflow:
     Incoming/*.jpg or *.jpeg
@@ -32,6 +32,7 @@ import atexit
 import csv
 import logging
 import os
+import shutil
 import sqlite3
 import sys
 import threading
@@ -48,7 +49,11 @@ from PIL import Image, ImageFilter
 from dotenv import dotenv_values, load_dotenv
 
 
-APPLICATION_NAME = "MyEstatePics AI Editor"
+DEFAULT_APPLICATION_NAME = "MyEstatePics AI Editor"
+RESPONSES_TEST_APPLICATION_NAME = "MyEstatePics AI Editor - Responses"
+APPLICATION_NAME = os.environ.get(
+    "MYESTATEPICS_APPLICATION_NAME", DEFAULT_APPLICATION_NAME
+)
 IS_PACKAGED = bool(getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"))
 
 
@@ -60,6 +65,39 @@ def resource_path(relative_path: str | Path) -> Path:
         else Path(__file__).resolve().parent
     )
     return root / Path(relative_path)
+
+
+def copy_legacy_env_if_needed(
+    new_data_dir: Path, legacy_data_dir: Path | None = None
+) -> bool:
+    """Copy the legacy key configuration once without modifying either source."""
+    if APPLICATION_NAME != RESPONSES_TEST_APPLICATION_NAME:
+        return False
+    migration_marker = new_data_dir / ".legacy_env_migration_complete"
+    if migration_marker.exists():
+        return False
+    legacy_dir = legacy_data_dir or (
+        Path.home() / "Library" / "Application Support" / DEFAULT_APPLICATION_NAME
+    )
+    source = legacy_dir / ".env"
+    destination = new_data_dir / ".env"
+    new_data_dir.mkdir(parents=True, exist_ok=True)
+    copied = False
+    try:
+        if not destination.exists() and source.is_file():
+            with source.open("rb") as source_file, destination.open(
+                "xb"
+            ) as destination_file:
+                shutil.copyfileobj(source_file, destination_file)
+            destination.chmod(0o600)
+            copied = True
+    except FileExistsError:
+        copied = False
+    except Exception:
+        destination.unlink(missing_ok=True)
+        raise
+    migration_marker.touch(mode=0o600, exist_ok=True)
+    return copied
 
 
 def application_data_dir() -> Path:
@@ -77,6 +115,7 @@ def application_data_dir() -> Path:
         path / "runtime" / "Data",
     ):
         directory.mkdir(parents=True, exist_ok=True)
+    copy_legacy_env_if_needed(path)
     return path
 
 
@@ -95,8 +134,8 @@ DATA_DIR = RUNTIME_DIR / "Data"
 HISTORY_DB = DATA_DIR / "image_history.sqlite3"
 PROMPT_FILE = resource_path("prompts/mls_production.txt")
 
-PROGRAM_VERSION = "2.1 RC1"
-PROMPT_VERSION = "2.1 RC1"
+PROGRAM_VERSION = "1.0.0"
+PROMPT_VERSION = "1.0"
 MODEL = "gpt-image-2"
 RESPONSES_MODEL = "gpt-5.6"
 QUALITY = "low"

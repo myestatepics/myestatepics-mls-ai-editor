@@ -161,8 +161,8 @@ def test_external_production_prompt_preserves_baseline_and_adds_architectural_fi
         in loaded_prompt
     )
 def test_application_and_prompt_versions_are_independent(app_module):
-    assert app_module.PROGRAM_VERSION == "2.1 RC1"
-    assert app_module.PROMPT_VERSION == "2.1 RC1"
+    assert app_module.PROGRAM_VERSION == "1.0.0"
+    assert app_module.PROMPT_VERSION == "1.0"
 
 
 def test_responses_api_is_primary_image_edit_path(tmp_path, app_module, caplog):
@@ -397,7 +397,7 @@ def test_paid_confirmation_summarizes_only_checked_images(app_module):
     assert "Quality: Medium" in text
     assert "Estimated cost: $0.32" in text
     assert "Demo Mode: Off" in text
-    assert "Prompt: MLS Production v2.1 RC1" in text
+    assert "Prompt: MLS Production v1.0" in text
 
 
 def test_retry_confirmation_queues_without_claiming_to_start(app_module):
@@ -496,6 +496,69 @@ def test_valid_api_key_is_accepted(tmp_path, monkeypatch, app_module):
 def test_missing_key_blocks_production_but_not_demo(app_module):
     assert not app_module.api_key_allows_processing(None, demo_mode=False)
     assert app_module.api_key_allows_processing(None, demo_mode=True)
+
+
+def test_responses_test_app_copies_legacy_env_once(
+    tmp_path, monkeypatch, app_module
+):
+    legacy = tmp_path / "MyEstatePics AI Editor"
+    responses = tmp_path / "MyEstatePics AI Editor - Responses"
+    legacy.mkdir()
+    legacy_env = legacy / ".env"
+    legacy_env.write_text("OPENAI_API_KEY=sk-legacy-test-key\n", encoding="utf-8")
+    original = legacy_env.read_bytes()
+    monkeypatch.setattr(
+        app_module,
+        "APPLICATION_NAME",
+        app_module.RESPONSES_TEST_APPLICATION_NAME,
+    )
+
+    assert app_module.copy_legacy_env_if_needed(responses, legacy)
+    assert (responses / ".env").read_bytes() == original
+    assert legacy_env.read_bytes() == original
+    assert (responses / ".legacy_env_migration_complete").exists()
+
+    (responses / ".env").unlink()
+    assert not app_module.copy_legacy_env_if_needed(responses, legacy)
+    assert not (responses / ".env").exists()
+    assert legacy_env.read_bytes() == original
+
+
+def test_default_app_never_copies_legacy_env(
+    tmp_path, monkeypatch, app_module
+):
+    legacy = tmp_path / "MyEstatePics AI Editor"
+    destination = tmp_path / "default"
+    legacy.mkdir()
+    (legacy / ".env").write_text(
+        "OPENAI_API_KEY=sk-legacy-test-key\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        app_module, "APPLICATION_NAME", app_module.DEFAULT_APPLICATION_NAME
+    )
+
+    assert not app_module.copy_legacy_env_if_needed(destination, legacy)
+    assert not (destination / ".env").exists()
+
+
+def test_responses_first_launch_without_legacy_env_never_copies_later(
+    tmp_path, monkeypatch, app_module
+):
+    legacy = tmp_path / "MyEstatePics AI Editor"
+    responses = tmp_path / "MyEstatePics AI Editor - Responses"
+    legacy.mkdir()
+    monkeypatch.setattr(
+        app_module,
+        "APPLICATION_NAME",
+        app_module.RESPONSES_TEST_APPLICATION_NAME,
+    )
+
+    assert not app_module.copy_legacy_env_if_needed(responses, legacy)
+    (legacy / ".env").write_text(
+        "OPENAI_API_KEY=sk-added-later\n", encoding="utf-8"
+    )
+    assert not app_module.copy_legacy_env_if_needed(responses, legacy)
+    assert not (responses / ".env").exists()
 
 
 def test_packaged_mode_uses_only_application_support_env(

@@ -57,7 +57,7 @@ Commit only intended files. Use an annotated tag after release approval, for
 example:
 
 ```bash
-git tag -a v2.1.0-rc1 -m "Production v2.1 RC1"
+git tag -a v1.0.0 -m "Production v1.0.0"
 ```
 
 Tag naming is a process recommendation; no tag is currently required by the

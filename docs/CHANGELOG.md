@@ -8,8 +8,15 @@ and download reference.
 
 ## Unreleased
 
-- Documentation audit corrections only; application code, tests, and the
-  production prompt are unchanged.
+- No changes recorded.
+
+## Production v1.0.0
+
+- first public production release
+- finalized the application version as v1.0.0 and prompt version as v1.0
+- retained the validated Responses image-editing workflow and MLS safeguards
+- added side-by-side Responses packaging with isolated Application Support data
+- added cooperative batch cancellation and safe first-launch key migration
 
 ## Production v2.1 RC1
 

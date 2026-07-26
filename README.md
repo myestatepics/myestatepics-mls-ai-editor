@@ -2,7 +2,7 @@
 
 MyEstatePics AI Editor is a PySide6 desktop application for conservative,
 batch-oriented enhancement of interior real-estate photographs. Production
-v2.1 RC1 uses the externally stored MLS production prompt v2.1 RC1 and the
+Production v1.0.0 uses the externally stored MLS production prompt v1.0 and the
 OpenAI Responses API image-generation editing tool. The original images remain
 in place, output filenames are preserved, and deterministic checks route
 results to Completed, NeedsReview, or Error.

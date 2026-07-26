@@ -51,7 +51,7 @@ The script:
 1. cleans `build/`, `dist/`, and generated spec files
 2. bundles the prompt and optional resource directories
 3. creates a windowed onedir app
-4. sets bundle name, identifier, and v2.1 RC1 metadata
+4. sets bundle name, identifier, and v1.0.0 metadata
 5. fails if a `.env` is bundled
 6. applies and verifies an ad-hoc signature
 

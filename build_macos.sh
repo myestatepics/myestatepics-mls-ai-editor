@@ -83,8 +83,8 @@ set_plist_string() {
 set_plist_string "CFBundleDisplayName" "$APP_NAME"
 set_plist_string "CFBundleName" "$APP_NAME"
 set_plist_string "CFBundleIdentifier" "$BUNDLE_ID"
-set_plist_string "CFBundleShortVersionString" "2.1 RC1"
-set_plist_string "CFBundleVersion" "2.1.0"
+set_plist_string "CFBundleShortVersionString" "1.0.0"
+set_plist_string "CFBundleVersion" "1.0.0"
 
 echo "Applying local ad-hoc signature after metadata updates..."
 codesign --force --deep --sign - "dist/$APP_NAME.app"

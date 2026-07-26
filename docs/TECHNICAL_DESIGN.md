@@ -2,7 +2,7 @@
 
 ## System context
 
-Production v2.1 RC1 is a single-process PySide6 application. The implementation
+Production v1.0.0 is a single-process PySide6 application. The implementation
 is intentionally concentrated in `myestatepics_ai_editor.py`; the prompt and
 legacy baseline are external files.
 
