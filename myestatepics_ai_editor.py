@@ -32,8 +32,10 @@ import atexit
 import csv
 import logging
 import os
+import shutil
 import sqlite3
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -47,7 +49,11 @@ from PIL import Image, ImageFilter
 from dotenv import dotenv_values, load_dotenv
 
 
-APPLICATION_NAME = "MyEstatePics AI Editor"
+DEFAULT_APPLICATION_NAME = "MyEstatePics AI Editor"
+DIRECT_TEST_APPLICATION_NAME = "MyEstatePics AI Editor - Direct"
+APPLICATION_NAME = os.environ.get(
+    "MYESTATEPICS_APPLICATION_NAME", DEFAULT_APPLICATION_NAME
+)
 IS_PACKAGED = bool(getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"))
 
 
@@ -59,6 +65,39 @@ def resource_path(relative_path: str | Path) -> Path:
         else Path(__file__).resolve().parent
     )
     return root / Path(relative_path)
+
+
+def copy_legacy_env_if_needed(
+    new_data_dir: Path, legacy_data_dir: Path | None = None
+) -> bool:
+    """Copy the legacy key configuration once without modifying its source."""
+    if APPLICATION_NAME != DIRECT_TEST_APPLICATION_NAME:
+        return False
+    migration_marker = new_data_dir / ".legacy_env_migration_complete"
+    if migration_marker.exists():
+        return False
+    legacy_dir = legacy_data_dir or (
+        Path.home() / "Library" / "Application Support" / DEFAULT_APPLICATION_NAME
+    )
+    source = legacy_dir / ".env"
+    destination = new_data_dir / ".env"
+    new_data_dir.mkdir(parents=True, exist_ok=True)
+    copied = False
+    try:
+        if not destination.exists() and source.is_file():
+            with source.open("rb") as source_file, destination.open(
+                "xb"
+            ) as destination_file:
+                shutil.copyfileobj(source_file, destination_file)
+            destination.chmod(0o600)
+            copied = True
+    except FileExistsError:
+        copied = False
+    except Exception:
+        destination.unlink(missing_ok=True)
+        raise
+    migration_marker.touch(mode=0o600, exist_ok=True)
+    return copied
 
 
 def application_data_dir() -> Path:
@@ -76,6 +115,7 @@ def application_data_dir() -> Path:
         path / "runtime" / "Data",
     ):
         directory.mkdir(parents=True, exist_ok=True)
+    copy_legacy_env_if_needed(path)
     return path
 
 
@@ -103,6 +143,8 @@ SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 LANDSCAPE_SIZE = "1536x1024"
 PORTRAIT_SIZE = "1024x1536"
 SQUARE_SIZE = "1024x1024"
+IMAGES_EDIT_API_PATH = "/v1/images/edits"
+API_OUTPUT_FORMAT = "png"
 MAX_FILE_SIZE_BYTES = 2_000_000
 JPEG_START_QUALITY = 95
 JPEG_MIN_QUALITY = 78
@@ -570,6 +612,17 @@ def call_image_editor(
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
+            logging.info(
+                "OpenAI direct image edit request: api_path=%s model=%s "
+                "quality=%s requested_size=%s output_format=%s attempt=%d/%d",
+                IMAGES_EDIT_API_PATH,
+                MODEL,
+                QUALITY,
+                requested_size,
+                API_OUTPUT_FORMAT,
+                attempt,
+                MAX_RETRIES,
+            )
             with input_file.open("rb") as image_file:
                 response = client.images.edit(
                     model=MODEL,
@@ -577,10 +630,28 @@ def call_image_editor(
                     prompt=full_prompt,
                     size=requested_size,
                     quality=QUALITY,
-                    output_format="png",
+                    output_format=API_OUTPUT_FORMAT,
                 )
 
             image_bytes = base64.b64decode(response.data[0].b64_json)
+            with Image.open(BytesIO(image_bytes)) as returned_image:
+                returned_size = (
+                    f"{returned_image.width}x{returned_image.height}"
+                )
+                returned_format = returned_image.format or API_OUTPUT_FORMAT
+            logging.info(
+                "OpenAI direct image edit response: api_path=%s model=%s "
+                "quality=%s requested_size=%s returned_size=%s "
+                "output_format=%s attempt=%d/%d cost_basis=estimated",
+                IMAGES_EDIT_API_PATH,
+                MODEL,
+                QUALITY,
+                requested_size,
+                returned_size,
+                returned_format.lower(),
+                attempt,
+                MAX_RETRIES,
+            )
             usage = extract_usage(response)
             return image_bytes, requested_size, usage
 
@@ -588,6 +659,15 @@ def call_image_editor(
             last_error = error
             if is_transient_error(error) and attempt < MAX_RETRIES:
                 delay = RETRY_BASE_DELAY_SECONDS * (2 ** (attempt - 1))
+                logging.warning(
+                    "Direct image edit attempt failed transiently; retrying: "
+                    "api_path=%s attempt=%d/%d delay_seconds=%d error_type=%s",
+                    IMAGES_EDIT_API_PATH,
+                    attempt,
+                    MAX_RETRIES,
+                    delay,
+                    type(error).__name__,
+                )
                 print(
                     f"    Temporary API error. Retrying in {delay} seconds "
                     f"({attempt}/{MAX_RETRIES})..."
@@ -1480,6 +1560,19 @@ class BatchSummary:
         return self.fallback_cost / self.images_processed
 
 
+class CancellationToken:
+    """Thread-safe cooperative cancellation for a sequential image batch."""
+
+    def __init__(self) -> None:
+        self._event = threading.Event()
+
+    def cancel(self) -> None:
+        self._event.set()
+
+    def is_cancelled(self) -> bool:
+        return self._event.is_set()
+
+
 def estimated_cost_per_image(quality: str) -> float:
     """Fallback estimate scaled from the preserved observed medium-quality cost."""
     if quality == "low":
@@ -2315,7 +2408,7 @@ def launch_gui() -> int:
             self.quality = quality
             self.demo_mode = demo_mode
             self.demo_result_mode = demo_result_mode
-            self.cancelled = False
+            self.cancellation = CancellationToken()
 
         @Slot()
         def run(self):
@@ -2324,7 +2417,7 @@ def launch_gui() -> int:
                     selected_files=self.selected_files,
                     quality=self.quality,
                     result_mode=self.demo_result_mode,
-                    cancel_requested=lambda: self.cancelled,
+                    cancel_requested=self.cancellation.is_cancelled,
                     event=lambda kind, payload: self.event_signal.emit(kind, payload),
                 )
             else:
@@ -2332,14 +2425,14 @@ def launch_gui() -> int:
                     self.client,
                     selected_files=self.selected_files,
                     quality=self.quality,
-                    cancel_requested=lambda: self.cancelled,
+                    cancel_requested=self.cancellation.is_cancelled,
                     event=lambda kind, payload: self.event_signal.emit(kind, payload),
                 )
             self.complete.emit(summary)
 
         @Slot()
         def cancel(self):
-            self.cancelled = True
+            self.cancellation.cancel()
 
     class ReviewWindow(QMainWindow):
         reprocess = Signal(str)
@@ -2540,6 +2633,7 @@ def launch_gui() -> int:
             self.thread = None
             self.worker = None
             self.processing_active = False
+            self.processing_control_states = {}
             self.api_key: str | None = None
             self.selected_files: set[Path] = set()
             self.available_files: list[Path] = []
@@ -3127,15 +3221,43 @@ def launch_gui() -> int:
             self.worker.complete.connect(self.thread.quit)
             self.thread.finished.connect(self.worker.deleteLater)
             self.thread.finished.connect(self.thread.deleteLater)
-            self.processing_active = True
-            self.update_start_enabled()
+            self.set_processing_active(True)
             self.cancel_button.setEnabled(True)
             self.thread.start()
 
+        def set_processing_active(self, active):
+            interactive_types = (
+                QPushButton,
+                QCheckBox,
+                QComboBox,
+                QGroupBox,
+                QTableWidget,
+            )
+            if active:
+                controls = []
+                for control_type in interactive_types:
+                    controls.extend(self.findChildren(control_type))
+                self.processing_control_states = {
+                    control: control.isEnabled()
+                    for control in dict.fromkeys(controls)
+                    if control is not self.cancel_button
+                }
+                for control in self.processing_control_states:
+                    control.setEnabled(False)
+            else:
+                for control, was_enabled in self.processing_control_states.items():
+                    control.setEnabled(was_enabled)
+                self.processing_control_states.clear()
+            self.processing_active = active
+            self.update_start_enabled()
+
         def cancel(self):
             if self.worker:
-                self.worker.cancelled = True
-                self.log.appendPlainText("Cancellation requested; the current image will finish safely.")
+                self.worker.cancel()
+                self.log.appendPlainText("Cancelled by user")
+                self.current.setText(
+                    "Current: Cancel requested — waiting for current image"
+                )
                 self.cancel_button.setEnabled(False)
 
         def on_event(self, kind, payload):
@@ -3149,7 +3271,7 @@ def launch_gui() -> int:
                 self.log.appendPlainText(
                     f"Filename: {payload['filename']} | Quality: {QUALITY} | "
                     f"Processing time: {payload['processing_time_seconds']:.2f}s | "
-                    f"API cost: ${payload['api_cost']:.4f} | "
+                    f"Estimated API cost: ${payload['api_cost']:.4f} | "
                     f"Destination: {payload['destination']} | "
                     f"NeedsReview reason: {review_reason}"
                 )
@@ -3160,17 +3282,19 @@ def launch_gui() -> int:
                 self.log.appendPlainText(
                     f"Filename: {payload['filename']} | Quality: {QUALITY} | "
                     f"Processing time: {payload['processing_time_seconds']:.2f}s | "
-                    f"API cost: ${payload['api_cost']:.4f} | "
+                    f"Estimated API cost: ${payload['api_cost']:.4f} | "
                     f"Destination: {payload['destination']} | NeedsReview reason: — | "
                     f"Error: {payload['error']}"
                 )
             elif kind == "cancelled":
-                self.log.appendPlainText("Batch cancelled between images.")
+                self.log.appendPlainText("Cancelled by user")
 
         def on_complete(self, summary):
-            self.processing_active = False
+            self.set_processing_active(False)
             self.cancel_button.setEnabled(False)
-            self.current.setText("Current: —")
+            self.current.setText(
+                "Current: Cancelled by user" if summary.cancelled else "Current: —"
+            )
             self.counts.setText(
                 f"Completed: {summary.completed}   NeedsReview: {summary.review}   Error: {summary.failed}"
             )
@@ -3184,8 +3308,9 @@ def launch_gui() -> int:
                 "Demo Batch Summary" if self.demo_checkbox.isChecked() else "Batch summary",
                 f"Images processed: {summary.images_processed}\n"
                 f"Quality: {summary.quality.title()}\n"
-                f"Total API cost: ${summary.fallback_cost:.2f}\n"
-                f"Average cost per image: ${summary.average_cost_per_image:.4f}\n"
+                f"Estimated total API cost: ${summary.fallback_cost:.2f}\n"
+                f"Estimated average cost per image: "
+                f"${summary.average_cost_per_image:.4f}\n"
                 f"Elapsed time: {summary.elapsed_seconds:.2f} seconds\n"
                 f"{usage}\n"
                 f"Completed: {summary.completed}\nNeedsReview: {summary.review}\n"

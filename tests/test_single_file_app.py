@@ -87,6 +87,8 @@ def test_mocked_end_to_end_preserves_filename_jpeg_limit_and_exif(tmp_path, app_
                 "Never transform blank walls or bright regions into windows or openings."
                 in kwargs["prompt"]
             )
+            assert "Never treat mirrors, shower glass, reflections" in kwargs["prompt"]
+            assert "Never create a window." in kwargs["prompt"]
             return response
 
     summary = app_module.process_batch(SimpleNamespace(images=Images()))
@@ -136,6 +138,64 @@ def test_external_production_prompt_preserves_baseline_and_adds_architectural_fi
         "Never transform blank walls or bright regions into windows or openings."
         in loaded_prompt
     )
+    assert "Never treat mirrors, shower glass, reflections" in loaded_prompt
+    assert "Never create blue sky unless editing an existing" in loaded_prompt
+    assert "leave that region unchanged" in loaded_prompt
+    assert "strong, natural MLS-quality window pull" in loaded_prompt
+    assert "blown out, white, gray, or unattractive" in loaded_prompt
+    assert "Preserve every real exterior object" in loaded_prompt
+    assert "Do not allow blue to bleed" in loaded_prompt
+    assert "complete exterior view." in loaded_prompt
+    assert "Never create a fake window" in loaded_prompt
+    assert "outdoor scenery inside a mirror" in loaded_prompt
+
+
+def test_direct_images_edit_is_the_only_production_request(
+    tmp_path, app_module, caplog
+):
+    configure_tmp(app_module, tmp_path)
+    source = app_module.INPUT_DIR / "direct.jpg"
+    image = textured_image()
+    image.save(source, format="JPEG", quality=95)
+    calls = []
+
+    class Images:
+        def edit(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                data=[
+                    SimpleNamespace(
+                        b64_json=base64.b64encode(make_png(image)).decode()
+                    )
+                ],
+                usage=None,
+            )
+
+    class Responses:
+        def create(self, **kwargs):
+            raise AssertionError("Responses API must not be used")
+
+    with caplog.at_level("INFO"):
+        result, requested_size, usage = app_module.call_image_editor(
+            SimpleNamespace(images=Images(), responses=Responses()),
+            source,
+            "Edit conservatively.",
+        )
+
+    assert result
+    assert requested_size == "1536x1024"
+    assert usage.total_tokens is None
+    assert len(calls) == 1
+    request = calls[0]
+    assert request["model"] == "gpt-image-2"
+    assert request["quality"] == "low"
+    assert request["size"] == "1536x1024"
+    assert request["output_format"] == "png"
+    assert "api_path=/v1/images/edits" in caplog.text
+    assert "requested_size=1536x1024" in caplog.text
+    assert "returned_size=120x80" in caplog.text
+    assert "cost_basis=estimated" in caplog.text
+    assert "gpt-5.6" not in caplog.text
 
 
 def test_application_and_prompt_versions_are_independent(app_module):
@@ -357,6 +417,69 @@ def test_valid_api_key_is_accepted(tmp_path, monkeypatch, app_module):
 def test_missing_key_blocks_production_but_not_demo(app_module):
     assert not app_module.api_key_allows_processing(None, demo_mode=False)
     assert app_module.api_key_allows_processing(None, demo_mode=True)
+
+
+def test_direct_test_app_copies_legacy_env_once(
+    tmp_path, monkeypatch, app_module
+):
+    legacy = tmp_path / "MyEstatePics AI Editor"
+    direct = tmp_path / "MyEstatePics AI Editor - Direct"
+    legacy.mkdir()
+    legacy_env = legacy / ".env"
+    legacy_env.write_text("OPENAI_API_KEY=sk-legacy-test-key\n", encoding="utf-8")
+    original = legacy_env.read_bytes()
+    monkeypatch.setattr(
+        app_module,
+        "APPLICATION_NAME",
+        app_module.DIRECT_TEST_APPLICATION_NAME,
+    )
+
+    assert app_module.copy_legacy_env_if_needed(direct, legacy)
+    assert (direct / ".env").read_bytes() == original
+    assert legacy_env.read_bytes() == original
+    assert (direct / ".legacy_env_migration_complete").exists()
+
+    (direct / ".env").unlink()
+    assert not app_module.copy_legacy_env_if_needed(direct, legacy)
+    assert not (direct / ".env").exists()
+    assert legacy_env.read_bytes() == original
+
+
+def test_default_app_never_copies_legacy_env(
+    tmp_path, monkeypatch, app_module
+):
+    legacy = tmp_path / "MyEstatePics AI Editor"
+    destination = tmp_path / "default"
+    legacy.mkdir()
+    (legacy / ".env").write_text(
+        "OPENAI_API_KEY=sk-legacy-test-key\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        app_module, "APPLICATION_NAME", app_module.DEFAULT_APPLICATION_NAME
+    )
+
+    assert not app_module.copy_legacy_env_if_needed(destination, legacy)
+    assert not (destination / ".env").exists()
+
+
+def test_direct_first_launch_without_legacy_env_never_copies_later(
+    tmp_path, monkeypatch, app_module
+):
+    legacy = tmp_path / "MyEstatePics AI Editor"
+    direct = tmp_path / "MyEstatePics AI Editor - Direct"
+    legacy.mkdir()
+    monkeypatch.setattr(
+        app_module,
+        "APPLICATION_NAME",
+        app_module.DIRECT_TEST_APPLICATION_NAME,
+    )
+
+    assert not app_module.copy_legacy_env_if_needed(direct, legacy)
+    (legacy / ".env").write_text(
+        "OPENAI_API_KEY=sk-added-later\n", encoding="utf-8"
+    )
+    assert not app_module.copy_legacy_env_if_needed(direct, legacy)
+    assert not (direct / ".env").exists()
 
 
 def test_packaged_mode_uses_only_application_support_env(
@@ -788,21 +911,36 @@ def test_cancel_stops_between_images_without_partial_file(tmp_path, app_module):
     configure_tmp(app_module, tmp_path)
     for name in ("a.jpg", "b.jpg"):
         textured_image().save(app_module.INPUT_DIR / name, format="JPEG", quality=95)
-    response = SimpleNamespace(
-        data=[SimpleNamespace(b64_json=base64.b64encode(make_png(textured_image())).decode())],
-        usage=None,
-    )
     calls = 0
+    cancellation = app_module.CancellationToken()
+    events = []
+    image = textured_image()
 
     class Images:
         def edit(self, **kwargs):
             nonlocal calls
             calls += 1
-            return response
+            cancellation.cancel()
+            return SimpleNamespace(
+                data=[
+                    SimpleNamespace(
+                        b64_json=base64.b64encode(make_png(image)).decode()
+                    )
+                ],
+                usage=None,
+            )
 
     summary = app_module.process_batch(
-        SimpleNamespace(images=Images()), cancel_requested=lambda: calls >= 1
+        SimpleNamespace(images=Images()),
+        cancel_requested=cancellation.is_cancelled,
+        event=lambda kind, payload: events.append((kind, payload)),
     )
     assert summary.cancelled
     assert calls == 1
+    assert summary.completed == 1
+    assert (app_module.OUTPUT_DIR / "a.jpg").exists()
+    assert not (app_module.OUTPUT_DIR / "b.jpg").exists()
+    assert (app_module.INPUT_DIR / "a.jpg").exists()
+    assert (app_module.INPUT_DIR / "b.jpg").exists()
+    assert ("cancelled", "b.jpg") in events
     assert not list(tmp_path.rglob("*.tmp"))

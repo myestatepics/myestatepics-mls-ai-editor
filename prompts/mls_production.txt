@@ -105,3 +105,44 @@ Mirror reflections must remain physically accurate to the original photograph.
 If an area is ambiguous, preserve the original rather than reconstructing it.
 
 Architectural fidelity always has higher priority than brightness, aesthetics, or window enhancement.
+
+CONFIRMED EXTERIOR WINDOW SAFEGUARD
+
+Treat a region as a real exterior window only when the source photograph shows
+all three: a physical window frame, an exterior wall boundary, and a visible
+outside scene.
+
+Never treat mirrors, shower glass, reflections, cabinet glass, glossy tile,
+polished stone, TV screens, door gaps, open interior doors, bright highlights,
+chrome, or appliances as windows.
+
+Never create a window. Never create blue sky unless editing an existing,
+confirmed exterior window. If uncertain whether a region is a real exterior
+window, leave that region unchanged.
+
+MLS WINDOW PULL REFINEMENT
+
+Perform a strong, natural MLS-quality window pull only through a confirmed real
+exterior window. Recover the exterior view cleanly while preserving the
+photographed property and realistic indoor-to-outdoor brightness.
+
+When the original sky region is blown out, white, gray, or unattractive,
+restore that same sky region as a clean, natural light daytime blue. Apply blue
+only to pixels belonging to the actual exterior sky region.
+
+Preserve every real exterior object from the original photograph, including
+neighboring houses, roofs, trees, landscaping, fences, roads, driveways,
+vehicles, and other visible outdoor details.
+
+Do not allow blue to bleed onto houses, trees, roofs, landscaping, window
+frames, blinds, curtains, or other non-sky surfaces. Do not replace the
+complete exterior view. Do not invent, remove, move, or substitute buildings,
+trees, landscaping, clouds, or any other exterior scenery.
+
+Never create a fake window or generate outdoor scenery inside a mirror,
+reflection, shower glass, cabinet glass, glossy surface, screen, or appliance.
+Preserve mirrors, reflections, glass, window frames, blinds, curtains, and all
+architectural details exactly as photographed.
+
+If uncertain whether an area is genuine exterior sky or another surface,
+preserve the photographed region unchanged.
