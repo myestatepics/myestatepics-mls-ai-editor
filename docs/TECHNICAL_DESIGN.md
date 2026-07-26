@@ -70,7 +70,7 @@ sequenceDiagram
     loop Each image
         W->>W: Analyze source and build adaptive addendum
         opt Production only
-            W->>A: images.edit
+            W->>A: responses.create with image_generation edit tool
             A-->>W: PNG and optional usage
         end
         W->>V: Compare source and generated output
@@ -94,11 +94,15 @@ the API key and application version.
 
 ## OpenAI integration
 
-Production creates `OpenAI(api_key=api_key)` explicitly. `client.images.edit`
-uses `gpt-image-2`, the selected Low/Medium quality, native orientation-based
-size, PNG response format, the original image, and the combined prompt.
-Transient errors retry up to three attempts with backoff. Demo Mode never
-creates the client.
+Production creates `OpenAI(api_key=api_key)` explicitly. The primary workflow
+uses `client.responses.create` with a mainline Responses model and the hosted
+`image_generation` tool forced to `action="edit"` with `gpt-image-2`. It sends
+the original image as a Base64 data URL at original detail, the selected
+Low/Medium quality, a supported size matched to the source aspect ratio, PNG
+output, and the combined prompt. `client.images.edit` remains only as a
+compatibility fallback for a client that has no Responses resource. Transient
+errors retry up to three attempts with backoff. Demo Mode never creates the
+client.
 
 ## Verification and export
 

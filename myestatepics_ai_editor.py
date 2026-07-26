@@ -8,7 +8,7 @@ Workflow:
             ↓
     Fixed MLS prompt + image-specific adaptive instructions
             ↓
-    GPT Image 2, medium quality, native output
+    GPT Image 2 through the Responses API
             ↓
     Conservative verification and optional gentle sharpening
             ↓
@@ -34,6 +34,7 @@ import logging
 import os
 import sqlite3
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -95,14 +96,20 @@ HISTORY_DB = DATA_DIR / "image_history.sqlite3"
 PROMPT_FILE = resource_path("prompts/mls_production.txt")
 
 PROGRAM_VERSION = "2.1 RC1"
-PROMPT_VERSION = "2.0 RC1"
+PROMPT_VERSION = "2.1 RC1"
 MODEL = "gpt-image-2"
+RESPONSES_MODEL = "gpt-5.6"
 QUALITY = "low"
 QUALITY_OPTIONS = ("low", "medium")
 SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png"}
-LANDSCAPE_SIZE = "1536x1024"
-PORTRAIT_SIZE = "1024x1536"
-SQUARE_SIZE = "1024x1024"
+API_MIN_PIXELS = 655_360
+API_MAX_PIXELS = 8_294_400
+API_MAX_EDGE = 3_840
+API_MAX_ASPECT_RATIO = 3.0
+API_SIZE_MULTIPLE = 16
+API_OUTPUT_FORMAT = "png"
+RESPONSES_API_PATH = "/v1/responses image_generation"
+IMAGES_EDIT_API_PATH = "/v1/images/edits"
 MAX_FILE_SIZE_BYTES = 2_000_000
 JPEG_START_QUALITY = 95
 JPEG_MIN_QUALITY = 78
@@ -268,11 +275,50 @@ def choose_native_size(input_file: Path) -> str:
     with Image.open(input_file) as image:
         width, height = image.size
 
-    if width > height:
-        return LANDSCAPE_SIZE
-    if height > width:
-        return PORTRAIT_SIZE
-    return SQUARE_SIZE
+    if width <= 0 or height <= 0:
+        raise ValueError(f"Invalid source dimensions: {width}x{height}")
+
+    source_ratio = max(width, height) / min(width, height)
+    if source_ratio > API_MAX_ASPECT_RATIO:
+        raise ValueError(
+            f"Source aspect ratio {source_ratio:.3f}:1 exceeds the OpenAI "
+            f"gpt-image-2 limit of {API_MAX_ASPECT_RATIO:.0f}:1."
+        )
+
+    landscape = width >= height
+    target_ratio = width / height
+    target_pixels = min(max(width * height, API_MIN_PIXELS), API_MAX_PIXELS)
+    best: tuple[float, float, int, int] | None = None
+    for candidate_width in range(API_SIZE_MULTIPLE, API_MAX_EDGE + 1, API_SIZE_MULTIPLE):
+        candidate_height = round(
+            candidate_width / target_ratio / API_SIZE_MULTIPLE
+        ) * API_SIZE_MULTIPLE
+        if not API_SIZE_MULTIPLE <= candidate_height <= API_MAX_EDGE:
+            continue
+        pixels = candidate_width * candidate_height
+        if not API_MIN_PIXELS <= pixels <= API_MAX_PIXELS:
+            continue
+        candidate_ratio = max(candidate_width, candidate_height) / min(
+            candidate_width, candidate_height
+        )
+        if candidate_ratio > API_MAX_ASPECT_RATIO:
+            continue
+        aspect_error = abs((candidate_width / candidate_height) / target_ratio - 1.0)
+        pixel_error = abs(pixels - target_pixels) / target_pixels
+        score = (aspect_error, pixel_error, candidate_width, candidate_height)
+        if best is None or score < best:
+            best = score
+
+    if best is None:
+        raise ValueError(
+            f"No officially supported gpt-image-2 size preserves the "
+            f"{width}x{height} source aspect ratio."
+        )
+
+    _, _, candidate_width, candidate_height = best
+    if not landscape and candidate_width > candidate_height:
+        candidate_width, candidate_height = candidate_height, candidate_width
+    return f"{candidate_width}x{candidate_height}"
 
 
 def image_to_rgb_array(image: Image.Image, max_edge: int) -> np.ndarray:
@@ -567,21 +613,103 @@ def call_image_editor(
 ) -> tuple[bytes, str, ApiUsage]:
     requested_size = choose_native_size(input_file)
     last_error: Exception | None = None
+    responses_create = getattr(getattr(client, "responses", None), "create", None)
+    use_responses = callable(responses_create)
+    api_path = RESPONSES_API_PATH if use_responses else IMAGES_EDIT_API_PATH
+    api_model = f"{RESPONSES_MODEL} + {MODEL}" if use_responses else MODEL
+
+    logging.info(
+        "OpenAI image edit request: api_path=%s responses_model=%s "
+        "image_tool_model=%s action=edit quality=%s requested_size=%s "
+        "output_format=%s",
+        api_path,
+        RESPONSES_MODEL if use_responses else "not-used",
+        MODEL,
+        QUALITY,
+        requested_size,
+        API_OUTPUT_FORMAT,
+    )
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            with input_file.open("rb") as image_file:
-                response = client.images.edit(
-                    model=MODEL,
-                    image=image_file,
-                    prompt=full_prompt,
-                    size=requested_size,
-                    quality=QUALITY,
-                    output_format="png",
+            if use_responses:
+                suffix = input_file.suffix.lower()
+                media_type = "image/png" if suffix == ".png" else "image/jpeg"
+                image_data_url = (
+                    f"data:{media_type};base64,"
+                    f"{base64.b64encode(input_file.read_bytes()).decode('ascii')}"
                 )
+                response = responses_create(
+                    model=RESPONSES_MODEL,
+                    input=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "input_text", "text": full_prompt},
+                                {
+                                    "type": "input_image",
+                                    "image_url": image_data_url,
+                                    "detail": "original",
+                                },
+                            ],
+                        }
+                    ],
+                    tools=[
+                        {
+                            "type": "image_generation",
+                            "action": "edit",
+                            "model": MODEL,
+                            "quality": QUALITY,
+                            "size": requested_size,
+                            "output_format": API_OUTPUT_FORMAT,
+                        }
+                    ],
+                    tool_choice={"type": "image_generation"},
+                    store=False,
+                )
+                image_results = [
+                    get_value(output, "result")
+                    for output in get_value(response, "output") or []
+                    if get_value(output, "type") == "image_generation_call"
+                    and get_value(output, "result")
+                ]
+                if not image_results:
+                    raise RuntimeError(
+                        "Responses API returned no image_generation_call result."
+                    )
+                encoded_image = image_results[0]
+            else:
+                logging.warning(
+                    "Responses image editing is unavailable in this OpenAI "
+                    "client; using %s fallback.",
+                    IMAGES_EDIT_API_PATH,
+                )
+                with input_file.open("rb") as image_file:
+                    response = client.images.edit(
+                        model=MODEL,
+                        image=image_file,
+                        prompt=full_prompt,
+                        size=requested_size,
+                        quality=QUALITY,
+                        output_format=API_OUTPUT_FORMAT,
+                    )
+                encoded_image = response.data[0].b64_json
 
-            image_bytes = base64.b64decode(response.data[0].b64_json)
+            image_bytes = base64.b64decode(encoded_image, validate=True)
+            with Image.open(BytesIO(image_bytes)) as returned_image:
+                returned_size = f"{returned_image.width}x{returned_image.height}"
+                returned_format = returned_image.format or API_OUTPUT_FORMAT
             usage = extract_usage(response)
+            logging.info(
+                "OpenAI image edit response: api_path=%s model=%s quality=%s "
+                "requested_size=%s returned_size=%s output_format=%s",
+                api_path,
+                api_model,
+                QUALITY,
+                requested_size,
+                returned_size,
+                returned_format.lower(),
+            )
             return image_bytes, requested_size, usage
 
         except Exception as error:
@@ -1480,6 +1608,19 @@ class BatchSummary:
         return self.fallback_cost / self.images_processed
 
 
+class CancellationToken:
+    """Thread-safe cooperative cancellation for a sequential image batch."""
+
+    def __init__(self) -> None:
+        self._event = threading.Event()
+
+    def cancel(self) -> None:
+        self._event.set()
+
+    def is_cancelled(self) -> bool:
+        return self._event.is_set()
+
+
 def estimated_cost_per_image(quality: str) -> float:
     """Fallback estimate scaled from the preserved observed medium-quality cost."""
     if quality == "low":
@@ -1919,7 +2060,11 @@ def process_batch(
                     usage=usage,
                     message=str(error),
                     processing_time_seconds=time.perf_counter() - image_started,
-                    api_cost=(estimated_cost_per_image(quality) if api_call_completed else 0.0),
+                    api_cost=(
+                        estimated_cost_per_image(quality)
+                        if api_call_completed
+                        else 0.0
+                    ),
                 ),
             )
             append_history(
@@ -1939,7 +2084,9 @@ def process_batch(
                     "error": str(error),
                     "processing_time_seconds": time.perf_counter() - image_started,
                     "api_cost": (
-                        estimated_cost_per_image(quality) if api_call_completed else 0.0
+                        estimated_cost_per_image(quality)
+                        if api_call_completed
+                        else 0.0
                     ),
                     "destination": str(ERROR_DIR),
                     "needs_review_reason": "",
@@ -2315,7 +2462,7 @@ def launch_gui() -> int:
             self.quality = quality
             self.demo_mode = demo_mode
             self.demo_result_mode = demo_result_mode
-            self.cancelled = False
+            self.cancellation = CancellationToken()
 
         @Slot()
         def run(self):
@@ -2324,7 +2471,7 @@ def launch_gui() -> int:
                     selected_files=self.selected_files,
                     quality=self.quality,
                     result_mode=self.demo_result_mode,
-                    cancel_requested=lambda: self.cancelled,
+                    cancel_requested=self.cancellation.is_cancelled,
                     event=lambda kind, payload: self.event_signal.emit(kind, payload),
                 )
             else:
@@ -2332,14 +2479,14 @@ def launch_gui() -> int:
                     self.client,
                     selected_files=self.selected_files,
                     quality=self.quality,
-                    cancel_requested=lambda: self.cancelled,
+                    cancel_requested=self.cancellation.is_cancelled,
                     event=lambda kind, payload: self.event_signal.emit(kind, payload),
                 )
             self.complete.emit(summary)
 
         @Slot()
         def cancel(self):
-            self.cancelled = True
+            self.cancellation.cancel()
 
     class ReviewWindow(QMainWindow):
         reprocess = Signal(str)
@@ -2540,6 +2687,7 @@ def launch_gui() -> int:
             self.thread = None
             self.worker = None
             self.processing_active = False
+            self.processing_control_states = {}
             self.api_key: str | None = None
             self.selected_files: set[Path] = set()
             self.available_files: list[Path] = []
@@ -3127,15 +3275,37 @@ def launch_gui() -> int:
             self.worker.complete.connect(self.thread.quit)
             self.thread.finished.connect(self.worker.deleteLater)
             self.thread.finished.connect(self.thread.deleteLater)
-            self.processing_active = True
-            self.update_start_enabled()
+            self.set_processing_active(True)
             self.cancel_button.setEnabled(True)
             self.thread.start()
 
+        def set_processing_active(self, active):
+            interactive_types = (QPushButton, QCheckBox, QComboBox, QGroupBox, QTableWidget)
+            if active:
+                controls = []
+                for control_type in interactive_types:
+                    controls.extend(self.findChildren(control_type))
+                self.processing_control_states = {
+                    control: control.isEnabled()
+                    for control in dict.fromkeys(controls)
+                    if control is not self.cancel_button
+                }
+                for control in self.processing_control_states:
+                    control.setEnabled(False)
+            else:
+                for control, was_enabled in self.processing_control_states.items():
+                    control.setEnabled(was_enabled)
+                self.processing_control_states.clear()
+            self.processing_active = active
+            self.update_start_enabled()
+
         def cancel(self):
             if self.worker:
-                self.worker.cancelled = True
-                self.log.appendPlainText("Cancellation requested; the current image will finish safely.")
+                self.worker.cancel()
+                self.log.appendPlainText("Cancelled by user")
+                self.current.setText(
+                    "Current: Cancel requested — waiting for current image"
+                )
                 self.cancel_button.setEnabled(False)
 
         def on_event(self, kind, payload):
@@ -3165,12 +3335,14 @@ def launch_gui() -> int:
                     f"Error: {payload['error']}"
                 )
             elif kind == "cancelled":
-                self.log.appendPlainText("Batch cancelled between images.")
+                self.log.appendPlainText("Cancelled by user")
 
         def on_complete(self, summary):
-            self.processing_active = False
+            self.set_processing_active(False)
             self.cancel_button.setEnabled(False)
-            self.current.setText("Current: —")
+            self.current.setText(
+                "Current: Cancelled by user" if summary.cancelled else "Current: —"
+            )
             self.counts.setText(
                 f"Completed: {summary.completed}   NeedsReview: {summary.review}   Error: {summary.failed}"
             )

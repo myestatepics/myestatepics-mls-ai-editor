@@ -73,23 +73,37 @@ def test_mocked_end_to_end_preserves_filename_jpeg_limit_and_exif(tmp_path, app_
     image = textured_image()
     image.save(source, format="JPEG", quality=95, exif=exif)
     response = SimpleNamespace(
-        data=[SimpleNamespace(b64_json=base64.b64encode(make_png(image)).decode())],
+        output=[
+            SimpleNamespace(
+                type="image_generation_call",
+                result=base64.b64encode(make_png(image)).decode(),
+            )
+        ],
         usage={"input_tokens": 10, "output_tokens": 20, "total_tokens": 30},
     )
 
-    class Images:
-        def edit(self, **kwargs):
-            assert kwargs["model"] == "gpt-image-2"
-            assert kwargs["quality"] == "low"
-            assert kwargs["output_format"] == "png"
-            assert "Never create windows inside mirror reflections." in kwargs["prompt"]
+    class Responses:
+        def create(self, **kwargs):
+            assert kwargs["model"] == "gpt-5.6"
+            tool = kwargs["tools"][0]
+            assert tool["model"] == "gpt-image-2"
+            assert tool["quality"] == "low"
+            assert tool["output_format"] == "png"
+            prompt = kwargs["input"][0]["content"][0]["text"]
+            assert "Never create windows inside mirror reflections." in prompt
             assert (
                 "Never transform blank walls or bright regions into windows or openings."
-                in kwargs["prompt"]
+                in prompt
             )
             return response
 
-    summary = app_module.process_batch(SimpleNamespace(images=Images()))
+    class Images:
+        def edit(self, **kwargs):
+            raise AssertionError("Responses must be the primary production path")
+
+    summary = app_module.process_batch(
+        SimpleNamespace(responses=Responses(), images=Images())
+    )
     assert summary.completed == 1
     output = app_module.OUTPUT_DIR / source.name
     assert output.exists()
@@ -100,6 +114,8 @@ def test_mocked_end_to_end_preserves_filename_jpeg_limit_and_exif(tmp_path, app_
         assert result.getexif()[274] == 1
         assert result.getexif()[315] == "MyEstatePics"
     assert summary.total_tokens == 30
+    assert summary.api_calls == 1
+    assert summary.fallback_cost > 0
     assert summary.quality == "low"
     assert summary.images_processed == 1
     assert summary.elapsed_seconds >= 0
@@ -110,6 +126,7 @@ def test_mocked_end_to_end_preserves_filename_jpeg_limit_and_exif(tmp_path, app_
     assert row["quality"] == "low"
     assert float(row["processing_time_seconds"]) >= 0
     assert float(row["api_cost"]) > 0
+    assert row["model"] == "gpt-image-2"
     assert row["destination"] == str(app_module.OUTPUT_DIR)
     assert row["needs_review_reason"] == ""
     assert app_module.HISTORY_DB.exists()
@@ -133,14 +150,136 @@ def test_external_production_prompt_preserves_baseline_and_adds_architectural_fi
     assert "Never create windows inside mirror reflections." in loaded_prompt
     assert "Never invent architecture that does not exist." in loaded_prompt
     assert (
+        "a physical window frame, an exterior wall boundary, and a visible"
+        in loaded_prompt
+    )
+    assert "Never treat mirrors, shower glass, reflections, cabinet glass" in loaded_prompt
+    assert "Never create blue sky unless editing an existing" in loaded_prompt
+    assert "leave that region unchanged" in loaded_prompt
+    assert (
         "Never transform blank walls or bright regions into windows or openings."
         in loaded_prompt
     )
-
-
 def test_application_and_prompt_versions_are_independent(app_module):
     assert app_module.PROGRAM_VERSION == "2.1 RC1"
-    assert app_module.PROMPT_VERSION == "2.0 RC1"
+    assert app_module.PROMPT_VERSION == "2.1 RC1"
+
+
+def test_responses_api_is_primary_image_edit_path(tmp_path, app_module, caplog):
+    configure_tmp(app_module, tmp_path)
+    source = app_module.INPUT_DIR / "response-edit.jpg"
+    image = textured_image((120, 80))
+    image.save(source, format="JPEG", quality=95)
+    calls = []
+
+    class Responses:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                output=[
+                    SimpleNamespace(
+                        type="image_generation_call",
+                        result=base64.b64encode(make_png(image)).decode(),
+                    )
+                ],
+                usage={"input_tokens": 11, "output_tokens": 22, "total_tokens": 33},
+            )
+
+    client = SimpleNamespace(responses=Responses())
+    with caplog.at_level("INFO"):
+        result, requested_size, usage = app_module.call_image_editor(
+            client, source, "Edit this image conservatively."
+        )
+
+    assert result
+    assert requested_size == "1008x672"
+    assert usage.total_tokens == 33
+    assert len(calls) == 1
+    request = calls[0]
+    assert request["model"] == "gpt-5.6"
+    assert request["tool_choice"] == {"type": "image_generation"}
+    assert request["store"] is False
+    assert request["input"][0]["content"][1]["detail"] == "original"
+    assert request["input"][0]["content"][1]["image_url"].startswith(
+        "data:image/jpeg;base64,"
+    )
+    tool = request["tools"][0]
+    assert tool == {
+        "type": "image_generation",
+        "action": "edit",
+        "model": "gpt-image-2",
+        "quality": "low",
+        "size": "1008x672",
+        "output_format": "png",
+    }
+    assert "api_path=/v1/responses image_generation" in caplog.text
+    assert "responses_model=gpt-5.6" in caplog.text
+    assert "image_tool_model=gpt-image-2" in caplog.text
+    assert "action=edit" in caplog.text
+    assert "quality=low" in caplog.text
+    assert "requested_size=1008x672" in caplog.text
+    assert "returned_size=120x80" in caplog.text
+    assert "output_format=png" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "source_size",
+    [(1200, 800), (1200, 900), (800, 1200), (1000, 1000)],
+)
+def test_api_size_preserves_source_aspect_within_official_constraints(
+    tmp_path, app_module, source_size
+):
+    source = tmp_path / "source.jpg"
+    textured_image(source_size).save(source, format="JPEG", quality=95)
+
+    requested = app_module.choose_native_size(source)
+    width, height = (int(value) for value in requested.split("x"))
+    source_ratio = source_size[0] / source_size[1]
+
+    assert width % 16 == 0
+    assert height % 16 == 0
+    assert max(width, height) <= 3840
+    assert 655_360 <= width * height <= 8_294_400
+    assert max(width, height) / min(width, height) <= 3
+    assert abs((width / height) / source_ratio - 1) < 0.01
+
+
+def test_api_size_rejects_only_officially_unsupported_panorama(
+    tmp_path, app_module
+):
+    source = tmp_path / "panorama.jpg"
+    textured_image((1600, 400)).save(source, format="JPEG", quality=95)
+
+    with pytest.raises(ValueError, match="OpenAI gpt-image-2 limit"):
+        app_module.choose_native_size(source)
+
+
+def test_jpeg_export_starts_at_quality_95_and_reduces_only_when_needed(
+    tmp_path, app_module
+):
+    source = tmp_path / "source.jpg"
+    image = textured_image((120, 80))
+    image.save(source, format="JPEG", quality=95)
+
+    jpeg_bytes, quality, oversize = app_module.encode_jpeg_under_limit(image, source)
+
+    assert jpeg_bytes
+    assert quality == 95
+    assert not oversize
+
+
+def test_jpeg_quality_reduces_only_after_quality_95_exceeds_limit(
+    tmp_path, monkeypatch, app_module
+):
+    source = tmp_path / "source.jpg"
+    image = textured_image((320, 240))
+    image.save(source, format="JPEG", quality=95)
+    monkeypatch.setattr(app_module, "MAX_FILE_SIZE_BYTES", 20_000)
+
+    jpeg_bytes, quality, _ = app_module.encode_jpeg_under_limit(image, source)
+
+    assert jpeg_bytes
+    assert quality < 95
 
 
 def test_folder_scan_auto_loads_supported_images(tmp_path, app_module):
@@ -258,7 +397,7 @@ def test_paid_confirmation_summarizes_only_checked_images(app_module):
     assert "Quality: Medium" in text
     assert "Estimated cost: $0.32" in text
     assert "Demo Mode: Off" in text
-    assert "Prompt: MLS Production v2.0 RC1" in text
+    assert "Prompt: MLS Production v2.1 RC1" in text
 
 
 def test_retry_confirmation_queues_without_claiming_to_start(app_module):
@@ -426,58 +565,70 @@ def test_api_configuration_log_never_contains_key(
     assert "key_found=True" in caplog.text
 
 
-def test_medium_quality_reaches_mocked_api(tmp_path, app_module):
+def test_medium_quality_reaches_mocked_responses_api(tmp_path, app_module):
     configure_tmp(app_module, tmp_path)
     source = app_module.INPUT_DIR / "medium.jpg"
     image = textured_image()
     image.save(source, format="JPEG", quality=95)
-    response = SimpleNamespace(
-        data=[SimpleNamespace(b64_json=base64.b64encode(make_png(image)).decode())],
-        usage=None,
-    )
     qualities = []
 
-    class Images:
-        def edit(self, **kwargs):
-            qualities.append(kwargs["quality"])
-            return response
+    class Responses:
+        def create(self, **kwargs):
+            qualities.append(kwargs["tools"][0]["quality"])
+            return SimpleNamespace(
+                output=[
+                    SimpleNamespace(
+                        type="image_generation_call",
+                        result=base64.b64encode(make_png(image)).decode(),
+                    )
+                ],
+                usage=None,
+            )
 
     summary = app_module.process_batch(
-        SimpleNamespace(images=Images()), quality="medium"
+        SimpleNamespace(responses=Responses()), quality="medium"
     )
     assert qualities == ["medium"]
     assert summary.quality == "medium"
 
 
-def test_selected_file_processing_and_empty_selection_processes_all(tmp_path, app_module):
+def test_selected_file_processing_and_empty_selection_processes_all(
+    tmp_path, app_module
+):
     configure_tmp(app_module, tmp_path)
     image = textured_image()
     for name in ("one.jpg", "two.jpg", "three.jpg"):
         image.save(app_module.INPUT_DIR / name, format="JPEG", quality=95)
-    response = SimpleNamespace(
-        data=[SimpleNamespace(b64_json=base64.b64encode(make_png(image)).decode())],
-        usage=None,
-    )
     calls = []
 
-    class Images:
-        def edit(self, **kwargs):
-            calls.append(Path(kwargs["image"].name).name)
-            return response
+    class Responses:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                output=[
+                    SimpleNamespace(
+                        type="image_generation_call",
+                        result=base64.b64encode(make_png(image)).decode(),
+                    )
+                ],
+                usage=None,
+            )
+
+    client = SimpleNamespace(responses=Responses())
 
     selected = app_module.INPUT_DIR / "two.jpg"
     first = app_module.process_batch(
-        SimpleNamespace(images=Images()), selected_files=[selected], quality="low"
+        client, selected_files=[selected], quality="low"
     )
     assert first.images_processed == 1
-    assert calls == ["two.jpg"]
+    assert len(calls) == 1
 
     calls.clear()
     second = app_module.process_batch(
-        SimpleNamespace(images=Images()), selected_files=[], quality="low"
+        client, selected_files=[], quality="low"
     )
     assert second.images_processed == 2
-    assert calls == ["one.jpg", "three.jpg"]
+    assert len(calls) == 2
 
 
 @pytest.mark.parametrize(
@@ -751,11 +902,11 @@ def test_failed_original_is_retained(tmp_path, app_module):
     source = app_module.INPUT_DIR / "failed.jpg"
     textured_image().save(source, format="JPEG")
 
-    class Images:
-        def edit(self, **kwargs):
+    class Responses:
+        def create(self, **kwargs):
             raise ValueError("mock API failure")
 
-    summary = app_module.process_batch(SimpleNamespace(images=Images()))
+    summary = app_module.process_batch(SimpleNamespace(responses=Responses()))
     assert summary.failed == 1
     assert source.exists()
     assert not (app_module.OUTPUT_DIR / source.name).exists()
@@ -784,25 +935,43 @@ def test_review_decision_updates_learning_history(tmp_path, app_module):
     assert label == "ACCEPTED"
 
 
-def test_cancel_stops_between_images_without_partial_file(tmp_path, app_module):
+def test_cancel_stops_between_images_without_partial_file(
+    tmp_path, app_module
+):
     configure_tmp(app_module, tmp_path)
     for name in ("a.jpg", "b.jpg"):
         textured_image().save(app_module.INPUT_DIR / name, format="JPEG", quality=95)
-    response = SimpleNamespace(
-        data=[SimpleNamespace(b64_json=base64.b64encode(make_png(textured_image())).decode())],
-        usage=None,
-    )
     calls = 0
+    image = textured_image()
+    cancellation = app_module.CancellationToken()
+    events = []
 
-    class Images:
-        def edit(self, **kwargs):
+    class Responses:
+        def create(self, **kwargs):
             nonlocal calls
             calls += 1
-            return response
+            cancellation.cancel()
+            return SimpleNamespace(
+                output=[
+                    SimpleNamespace(
+                        type="image_generation_call",
+                        result=base64.b64encode(make_png(image)).decode(),
+                    )
+                ],
+                usage=None,
+            )
 
     summary = app_module.process_batch(
-        SimpleNamespace(images=Images()), cancel_requested=lambda: calls >= 1
+        SimpleNamespace(responses=Responses()),
+        cancel_requested=cancellation.is_cancelled,
+        event=lambda kind, payload: events.append((kind, payload)),
     )
     assert summary.cancelled
     assert calls == 1
+    assert summary.completed == 1
+    assert (app_module.OUTPUT_DIR / "a.jpg").exists()
+    assert not (app_module.OUTPUT_DIR / "b.jpg").exists()
+    assert (app_module.INPUT_DIR / "a.jpg").exists()
+    assert (app_module.INPUT_DIR / "b.jpg").exists()
+    assert ("cancelled", "b.jpg") in events
     assert not list(tmp_path.rglob("*.tmp"))

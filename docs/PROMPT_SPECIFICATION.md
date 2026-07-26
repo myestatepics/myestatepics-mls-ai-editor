@@ -3,7 +3,7 @@
 ## Source of truth
 
 The production prompt is `prompts/mls_production.txt`, identified in the UI as
-Prompt v2.0 RC1. This document explains its intent; it does not replace or
+Prompt v2.1 RC1. This document explains its intent; it does not replace or
 duplicate the prompt as an executable source.
 
 ## Design philosophy
