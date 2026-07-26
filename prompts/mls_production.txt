@@ -106,7 +106,14 @@ If an area is ambiguous, preserve the original rather than reconstructing it.
 
 Architectural fidelity always has higher priority than brightness, aesthetics, or window enhancement.
 
-CONFIRMED EXTERIOR WINDOW SAFEGUARD
+STRUCTURAL LOCK — HIGHEST PRIORITY
+
+Preserve the original architecture exactly. Never create, insert, remove,
+enlarge, shrink, relocate, or modify windows, doors, skylights, wall openings,
+arches, or structural openings.
+
+If there is no window in the original photograph, do not create one. Walls must
+remain walls. Only edit windows that already exist in the original photograph.
 
 Treat a region as a real exterior window only when the source photograph shows
 all three: a physical window frame, an exterior wall boundary, and a visible
@@ -120,29 +127,44 @@ Never create a window. Never create blue sky unless editing an existing,
 confirmed exterior window. If uncertain whether a region is a real exterior
 window, leave that region unchanged.
 
-MLS WINDOW PULL REFINEMENT
+WINDOW PULL
 
-Perform a strong, natural MLS-quality window pull only through a confirmed real
-exterior window. Recover the exterior view cleanly while preserving the
-photographed property and realistic indoor-to-outdoor brightness.
-
-When the original sky region is blown out, white, gray, or unattractive,
-restore that same sky region as a clean, natural light daytime blue. Apply blue
-only to pixels belonging to the actual exterior sky region.
+For an existing confirmed window, perform a strong, natural MLS-quality window pull.
+Recover the real exterior whenever possible.
 
 Preserve every real exterior object from the original photograph, including
-neighboring houses, roofs, trees, landscaping, fences, roads, driveways,
-vehicles, and other visible outdoor details.
+neighboring houses, trees, landscaping, decks, fences, roads, driveways,
+vehicles, roofs, and all other outdoor objects.
 
-Do not allow blue to bleed onto houses, trees, roofs, landscaping, window
-frames, blinds, curtains, or other non-sky surfaces. Do not replace the
-complete exterior view. Do not invent, remove, move, or substitute buildings,
-trees, landscaping, clouds, or any other exterior scenery.
+Do not replace the complete exterior view. Do not invent a different exterior
+or substitute any outdoor object.
 
-Never create a fake window or generate outdoor scenery inside a mirror,
-reflection, shower glass, cabinet glass, glossy surface, screen, or appliance.
-Preserve mirrors, reflections, glass, window frames, blinds, curtains, and all
-architectural details exactly as photographed.
+SKY REPLACEMENT — EXISTING WINDOWS ONLY
 
-If uncertain whether an area is genuine exterior sky or another surface,
-preserve the photographed region unchanged.
+When the original sky region is blown out, white, gray, or unattractive,
+replace only that same sky portion with a clean, natural light-blue MLS sky.
+Apply blue only to pixels belonging to the actual exterior sky region.
+
+Keep every real exterior object unchanged. Do not allow blue to bleed onto
+houses, trees, roofs, decks, fences, landscaping, window frames, curtains,
+blinds, or any other non-sky surface.
+
+MIRRORS AND REFLECTIONS
+
+Never create a fake window, fake outdoor scenery, or fake reflection. Never
+generate outdoor scenery inside a mirror, reflection, shower glass, cabinet
+glass, glossy surface, screen, or appliance.
+
+Mirrors must continue to reflect the original room. Preserve mirrors,
+reflections, glass, window frames, blinds, curtains, and all architectural
+details exactly as photographed.
+
+PRESERVE EVERYTHING ELSE
+
+Do not change room geometry, camera position, perspective, materials, wall
+colors, floor colors, cabinet colors, countertops, trim, doors, windows, or
+furniture placement.
+
+The objective is to improve the photograph, not redesign it. If uncertain
+whether an area is genuine exterior sky or another surface, preserve the
+photographed region unchanged.
