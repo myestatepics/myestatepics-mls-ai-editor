@@ -29,12 +29,14 @@ Important:
 
 import base64
 import atexit
+import configparser
 import csv
 import logging
 import os
 import shutil
 import sqlite3
 import sys
+import tempfile
 import threading
 import time
 from dataclasses import dataclass
@@ -1587,7 +1589,136 @@ FOLDER_SETTING_KEYS = (
     "folders/error",
     "folders/logs",
 )
+INCOMING_FOLDER_SETTING = "folders/incoming"
+COMPLETED_FOLDER_SETTING = "folders/completed"
+LAST_GOOD_INCOMING_SETTING = "folders/last_good_incoming"
+LAST_GOOD_COMPLETED_SETTING = "folders/last_good_completed"
 ADVANCED_FOLDERS_SETTING = "ui/advanced_folders_expanded"
+
+
+@dataclass(frozen=True)
+class FolderIntegrityResult:
+    valid: bool
+    warnings: tuple[str, ...] = ()
+    error: str = ""
+
+
+def _supported_file_count(directory: Path) -> int:
+    try:
+        return sum(
+            1
+            for path in Path(directory).iterdir()
+            if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS
+        )
+    except (OSError, PermissionError):
+        return 0
+
+
+def validate_primary_folders(incoming: Path, completed: Path) -> FolderIntegrityResult:
+    """Validate the two user-facing folders and flag likely role reversal."""
+    incoming = Path(incoming).expanduser().resolve()
+    completed = Path(completed).expanduser().resolve()
+    if incoming == completed:
+        return FolderIntegrityResult(False, error="Incoming and Completed must use different folders.")
+    for label, path in (("Incoming", incoming), ("Completed", completed)):
+        if not path.is_dir():
+            return FolderIntegrityResult(False, error=f"{label} folder does not exist: {path}")
+        if not os.access(path, os.R_OK | os.X_OK):
+            return FolderIntegrityResult(False, error=f"{label} folder is not readable: {path}")
+
+    incoming_name = incoming.name.casefold().replace(" ", "")
+    completed_name = completed.name.casefold().replace(" ", "")
+    incoming_looks_final = incoming_name.endswith("final") and not incoming_name.endswith("prefinal")
+    completed_looks_source = completed_name.endswith("prefinal") or completed_name.endswith("wip")
+    warnings: list[str] = []
+    if incoming_looks_final and completed_looks_source:
+        warnings.append(
+            "Folder names suggest Incoming and Completed may be reversed "
+            f"(Incoming: {incoming.name}; Completed: {completed.name})."
+        )
+    incoming_count = _supported_file_count(incoming)
+    completed_count = _supported_file_count(completed)
+    if incoming_count == 0 and completed_count > 0:
+        warnings.append(
+            "Incoming contains no supported images while Completed contains "
+            f"{completed_count}; verify the folder roles."
+        )
+    return FolderIntegrityResult(True, tuple(warnings))
+
+
+def _atomic_update_preferences(preferences_path: Path, values: dict[str, str]) -> None:
+    """Atomically update INI values without exposing a partial folder pair."""
+    preferences_path = Path(preferences_path)
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.optionxform = str
+    if preferences_path.exists():
+        parser.read(preferences_path, encoding="utf-8")
+    for key, value in values.items():
+        section, option = key.split("/", 1)
+        if not parser.has_section(section):
+            parser.add_section(section)
+        parser.set(section, option, value)
+    preferences_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_name: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", dir=preferences_path.parent,
+            prefix=f".{preferences_path.name}.", suffix=".tmp", delete=False,
+        ) as temporary:
+            temporary_name = temporary.name
+            parser.write(temporary, space_around_delimiters=False)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_name, preferences_path)
+        temporary_name = None
+        try:
+            directory_fd = os.open(preferences_path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        except OSError:
+            pass
+    finally:
+        if temporary_name:
+            Path(temporary_name).unlink(missing_ok=True)
+
+
+def save_primary_folder_settings(
+    preferences_path: Path, *, incoming: Path, completed: Path
+) -> None:
+    """Persist the validated primary-folder pair and its last-known-good copy."""
+    result = validate_primary_folders(incoming, completed)
+    if not result.valid:
+        raise ValueError(result.error)
+    values = {
+        INCOMING_FOLDER_SETTING: str(Path(incoming)),
+        COMPLETED_FOLDER_SETTING: str(Path(completed)),
+        LAST_GOOD_INCOMING_SETTING: str(Path(incoming)),
+        LAST_GOOD_COMPLETED_SETTING: str(Path(completed)),
+    }
+    _atomic_update_preferences(preferences_path, values)
+
+
+def load_primary_folder_settings(
+    settings: Any, default_incoming: Path, default_completed: Path
+) -> tuple[Path, Path, FolderIntegrityResult]:
+    incoming = Path(settings.value(INCOMING_FOLDER_SETTING, str(default_incoming)))
+    completed = Path(settings.value(COMPLETED_FOLDER_SETTING, str(default_completed)))
+    result = validate_primary_folders(incoming, completed)
+    if result.valid and not result.warnings:
+        return incoming, completed, result
+    last_incoming = Path(settings.value(LAST_GOOD_INCOMING_SETTING, str(default_incoming)))
+    last_completed = Path(settings.value(LAST_GOOD_COMPLETED_SETTING, str(default_completed)))
+    last_result = validate_primary_folders(last_incoming, last_completed)
+    if last_result.valid and not last_result.warnings:
+        return last_incoming, last_completed, result
+    return Path(default_incoming), Path(default_completed), result
+
+
+def scanning_status_text(incoming: Path, count: int) -> str:
+    noun = "image" if count == 1 else "images"
+    return f"Scanning: {Path(incoming)}\n{count} supported {noun} found"
 
 
 def scan_supported_images(input_dir: Path) -> list[Path]:
@@ -1691,6 +1822,10 @@ def load_folder_settings(settings: Any, defaults: tuple[Path, ...]) -> tuple[Pat
 
 
 def save_folder_setting(settings: Any, index: int, path: Path) -> None:
+    if index < 2:
+        raise ValueError(
+            "Incoming and Completed must be saved through their explicit setters."
+        )
     settings.setValue(FOLDER_SETTING_KEYS[index], str(Path(path)))
 
 
@@ -2641,8 +2776,9 @@ def launch_gui() -> int:
             self.selection_events_enabled = False
             self.selection_generation = 0
             self.folder_configuration_valid = True
+            self.preferences_path = USER_DATA_DIR / "preferences.ini"
             self.settings = QSettings(
-                str(USER_DATA_DIR / "preferences.ini"), QSettings.IniFormat
+                str(self.preferences_path), QSettings.IniFormat
             )
             self.review_window = ReviewWindow(self)
             self.review_window.reprocess.connect(self.queue_retry)
@@ -2695,11 +2831,27 @@ def launch_gui() -> int:
             layout.addWidget(self.demo_banner)
 
             default_paths = (INPUT_DIR, OUTPUT_DIR, REVIEW_DIR, ERROR_DIR, LOG_DIR)
-            saved_paths = load_folder_settings(self.settings, default_paths)
+            saved_paths = list(load_folder_settings(self.settings, default_paths))
+            incoming, completed, self.startup_folder_integrity = load_primary_folder_settings(
+                self.settings, default_paths[0], default_paths[1]
+            )
+            saved_paths[0], saved_paths[1] = incoming, completed
+            self.folder_paths = list(saved_paths)
+            logging.info(
+                "Folder configuration loaded: source=startup restore incoming=%s "
+                "completed=%s validation=%s",
+                incoming,
+                completed,
+                (
+                    self.startup_folder_integrity.error
+                    or "; ".join(self.startup_folder_integrity.warnings)
+                    or "valid"
+                ),
+            )
             self.path_labels = []
 
             def add_folder_row(parent_layout, row, index, title_text):
-                path_label = QLabel(str(saved_paths[index]))
+                path_label = QLabel(str(self.folder_paths[index]))
                 path_label.setObjectName("pathValue")
                 path_label.setMinimumHeight(30)
                 path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -2756,10 +2908,13 @@ def launch_gui() -> int:
             self.demo_result.setEnabled(False)
             job_layout.addWidget(QLabel("Demo Results"), 5, 2)
             job_layout.addWidget(self.demo_result, 5, 3)
+            self.scan_status = QLabel()
+            self.scan_status.setWordWrap(True)
+            job_layout.addWidget(self.scan_status, 6, 0, 1, 4)
             self.folder_validation = QLabel()
             self.folder_validation.setWordWrap(True)
             self.folder_validation.setStyleSheet("color: #b42318;")
-            job_layout.addWidget(self.folder_validation, 6, 0, 1, 4)
+            job_layout.addWidget(self.folder_validation, 7, 0, 1, 4)
             layout.addWidget(job_group)
 
             self.advanced_group = QGroupBox("Advanced Folders")
@@ -2872,18 +3027,103 @@ def launch_gui() -> int:
                 self.resize(saved_size)
             if load_boolean_setting(self.settings, "ui/demo_mode", False):
                 self.demo_checkbox.setChecked(True)
+            if (
+                not self.startup_folder_integrity.valid
+                or self.startup_folder_integrity.warnings
+            ):
+                QTimer.singleShot(0, self.show_startup_folder_warning)
 
         def closeEvent(self, event):
-            self.settings.setValue("ui/window_size", self.size())
-            self.settings.setValue("ui/demo_mode", self.demo_checkbox.isChecked())
-            self.settings.sync()
+            _atomic_update_preferences(
+                self.preferences_path,
+                {
+                    INCOMING_FOLDER_SETTING: str(self.folder_paths[0]),
+                    COMPLETED_FOLDER_SETTING: str(self.folder_paths[1]),
+                    LAST_GOOD_INCOMING_SETTING: str(self.folder_paths[0]),
+                    LAST_GOOD_COMPLETED_SETTING: str(self.folder_paths[1]),
+                    "ui/window_size": (
+                        f"@Size({self.size().width()} {self.size().height()})"
+                    ),
+                    "ui/demo_mode": (
+                        "true" if self.demo_checkbox.isChecked() else "false"
+                    ),
+                },
+            )
+            logging.info(
+                "Folder configuration saved: source=shutdown incoming=%s completed=%s "
+                "validation=valid",
+                self.folder_paths[0],
+                self.folder_paths[1],
+            )
             super().closeEvent(event)
 
         def apply_paths(self):
             if self.demo_checkbox.isChecked():
-                configure_demo_runtime_paths(Path(self.path_labels[0].text()))
+                configure_demo_runtime_paths(self.folder_paths[0])
             else:
-                configure_runtime_paths(*(Path(label.text()) for label in self.path_labels))
+                configure_runtime_paths(*self.folder_paths)
+
+        def show_startup_folder_warning(self):
+            result = self.startup_folder_integrity
+            detail = result.error or "\n".join(result.warnings)
+            logging.warning(
+                "Folder configuration rejected during startup restore: %s", detail
+            )
+            QMessageBox.warning(
+                self,
+                "Folder configuration needs attention",
+                f"Saved folders were not used because they may be invalid or reversed.\n\n{detail}\n\n"
+                "The last known good or default folders are shown. Please verify them.",
+            )
+
+        def _confirm_folder_warnings(self, result):
+            if not result.warnings:
+                return True
+            answer = QMessageBox.warning(
+                self,
+                "Verify folder roles",
+                "\n\n".join(result.warnings)
+                + "\n\nSave these folders anyway?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            return answer == QMessageBox.Yes
+
+        def _set_primary_folder(self, role, path, source="user selection"):
+            index = 0 if role == "incoming" else 1
+            candidate = list(self.folder_paths)
+            candidate[index] = Path(path)
+            result = validate_primary_folders(candidate[0], candidate[1])
+            if not result.valid:
+                logging.warning(
+                    "Folder update rejected: role=%s source=%s path=%s reason=%s",
+                    role, source, path, result.error,
+                )
+                QMessageBox.warning(self, "Invalid folder configuration", result.error)
+                return False
+            if not self._confirm_folder_warnings(result):
+                logging.warning(
+                    "Folder update rejected by user: role=%s source=%s path=%s warnings=%s",
+                    role, source, path, "; ".join(result.warnings),
+                )
+                return False
+            save_primary_folder_settings(
+                self.preferences_path, incoming=candidate[0], completed=candidate[1]
+            )
+            self.folder_paths[index] = Path(path)
+            self.path_labels[index].setText(str(path))
+            logging.info(
+                "Folder update accepted: role=%s source=%s incoming=%s completed=%s validation=%s",
+                role, source, self.folder_paths[0], self.folder_paths[1],
+                "warning-confirmed" if result.warnings else "valid",
+            )
+            return True
+
+        def set_incoming_folder(self, path, source="user selection"):
+            return self._set_primary_folder("incoming", Path(path), source)
+
+        def set_completed_folder(self, path, source="user selection"):
+            return self._set_primary_folder("completed", Path(path), source)
 
         def on_demo_toggled(self, enabled):
             self.demo_banner.setVisible(enabled)
@@ -2904,10 +3144,26 @@ def launch_gui() -> int:
             self.analyze()
 
         def choose_folder(self, index):
-            chosen = QFileDialog.getExistingDirectory(self, "Choose folder", self.path_labels[index].text())
+            role_name = ("Incoming", "Completed", "NeedsReview", "Error", "Logs")[index]
+            chosen = QFileDialog.getExistingDirectory(
+                self, f"Choose {role_name} folder", str(self.folder_paths[index])
+            )
             if chosen:
-                self.path_labels[index].setText(chosen)
-                save_folder_setting(self.settings, index, Path(chosen))
+                logging.info(
+                    "Folder selected: role=%s source=user selection selected_path=%s",
+                    role_name, chosen,
+                )
+                if index == 0 and not self.set_incoming_folder(chosen):
+                    return
+                if index == 1 and not self.set_completed_folder(chosen):
+                    return
+                if index >= 2:
+                    self.folder_paths[index] = Path(chosen)
+                    self.path_labels[index].setText(chosen)
+                    _atomic_update_preferences(
+                        self.preferences_path,
+                        {FOLDER_SETTING_KEYS[index]: str(Path(chosen))},
+                    )
                 if index == 0:
                     self.rescan_folder()
                 else:
@@ -2915,7 +3171,10 @@ def launch_gui() -> int:
 
         def on_advanced_toggled(self, expanded):
             self.advanced_content.setVisible(expanded)
-            self.settings.setValue(ADVANCED_FOLDERS_SETTING, expanded)
+            _atomic_update_preferences(
+                self.preferences_path,
+                {ADVANCED_FOLDERS_SETTING: "true" if expanded else "false"},
+            )
 
         def rescan_folder(self, checked=False):
             del checked
@@ -2927,8 +3186,9 @@ def launch_gui() -> int:
             self.refresh_selection_table()
             self.update_job_summary()
             logging.info(
-                "Incoming scan: folder=%s found=%d selected=%d",
-                INPUT_DIR,
+                "Incoming scan: incoming=%s completed=%s resolved=%s exists=%s readable=%s found=%d selected=%d",
+                self.folder_paths[0], self.folder_paths[1], INPUT_DIR.resolve(),
+                INPUT_DIR.is_dir(), os.access(INPUT_DIR, os.R_OK | os.X_OK),
                 len(self.available_files),
                 len(self.selected_files),
             )
@@ -3064,7 +3324,7 @@ def launch_gui() -> int:
         def update_job_summary(self):
             self.apply_paths()
             valid, message = validate_folder_configuration(
-                *(Path(label.text()) for label in self.path_labels[:4])
+                *self.folder_paths[:4]
             )
             self.folder_configuration_valid = valid
             eligible = self.eligible_selected_files()
@@ -3082,6 +3342,9 @@ def launch_gui() -> int:
             self.folder_validation.setText(summary_message)
             quality = self.quality.currentText().lower()
             self.images_found.setText(str(len(self.available_files)))
+            self.scan_status.setText(
+                scanning_status_text(self.folder_paths[0], len(self.available_files))
+            )
             self.images_selected.setText(str(len(self.selected_files)))
             self.cost.setText(
                 f"${selected_batch_cost(eligible, quality, self.demo_checkbox.isChecked()):.2f}"
@@ -3148,7 +3411,7 @@ def launch_gui() -> int:
             if self.demo_checkbox.isChecked():
                 path = (INPUT_DIR, OUTPUT_DIR, REVIEW_DIR, ERROR_DIR, LOG_DIR)[index]
             else:
-                path = Path(self.path_labels[index].text())
+                path = self.folder_paths[index]
             path.mkdir(parents=True, exist_ok=True)
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
