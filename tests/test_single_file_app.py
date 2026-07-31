@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import base64
+import configparser
 import csv
 import importlib.util
+import inspect
 import sqlite3
 import sys
 from io import BytesIO
@@ -310,6 +312,181 @@ def test_folder_paths_and_advanced_state_are_remembered(tmp_path, app_module):
     assert app_module.load_boolean_setting(
         settings, app_module.ADVANCED_FOLDERS_SETTING
     )
+
+
+class IniSettings:
+    def __init__(self, path):
+        self.parser = configparser.ConfigParser(interpolation=None)
+        self.parser.read(path, encoding="utf-8")
+
+    def value(self, key, default=None):
+        section, option = key.split("/", 1)
+        return self.parser.get(section, option, fallback=default)
+
+
+def make_primary_folders(tmp_path):
+    incoming = tmp_path / "Property-Prefinal"
+    completed = tmp_path / "Property-Final"
+    incoming.mkdir()
+    completed.mkdir()
+    return incoming, completed
+
+
+def test_primary_folder_atomic_round_trip_preserves_roles(tmp_path, app_module):
+    incoming, completed = make_primary_folders(tmp_path)
+    preferences = tmp_path / "preferences.ini"
+    app_module.save_primary_folder_settings(
+        preferences, incoming=incoming, completed=completed
+    )
+    loaded_incoming, loaded_completed, result = app_module.load_primary_folder_settings(
+        IniSettings(preferences), incoming, completed
+    )
+    assert result.valid and not result.warnings
+    assert loaded_incoming == incoming
+    assert loaded_completed == completed
+
+
+def test_primary_folder_save_requires_named_arguments(tmp_path, app_module):
+    incoming, completed = make_primary_folders(tmp_path)
+    with pytest.raises(TypeError):
+        app_module.save_primary_folder_settings(
+            tmp_path / "preferences.ini", incoming, completed
+        )
+
+
+def test_generic_index_writer_cannot_write_primary_folder_keys(app_module):
+    class Settings:
+        def setValue(self, key, value):
+            raise AssertionError("primary key must not reach generic writer")
+
+    with pytest.raises(ValueError, match="explicit setters"):
+        app_module.save_folder_setting(Settings(), 0, Path("Incoming"))
+    with pytest.raises(ValueError, match="explicit setters"):
+        app_module.save_folder_setting(Settings(), 1, Path("Completed"))
+
+
+def test_runtime_paths_use_canonical_state_not_widget_text(app_module):
+    source = inspect.getsource(app_module.launch_gui)
+    assert "configure_runtime_paths(*self.folder_paths)" in source
+    assert "configure_runtime_paths(*(Path(label.text())" not in source
+
+
+def test_incoming_update_cannot_change_completed_value(tmp_path, app_module):
+    incoming, completed = make_primary_folders(tmp_path)
+    replacement = tmp_path / "Replacement-Prefinal"
+    replacement.mkdir()
+    preferences = tmp_path / "preferences.ini"
+    app_module.save_primary_folder_settings(
+        preferences, incoming=incoming, completed=completed
+    )
+    app_module.save_primary_folder_settings(
+        preferences, incoming=replacement, completed=completed
+    )
+    settings = IniSettings(preferences)
+    assert Path(settings.value(app_module.INCOMING_FOLDER_SETTING)) == replacement
+    assert Path(settings.value(app_module.COMPLETED_FOLDER_SETTING)) == completed
+
+
+def test_completed_update_cannot_change_incoming_value(tmp_path, app_module):
+    incoming, completed = make_primary_folders(tmp_path)
+    replacement = tmp_path / "Replacement-Final"
+    replacement.mkdir()
+    preferences = tmp_path / "preferences.ini"
+    app_module.save_primary_folder_settings(
+        preferences, incoming=incoming, completed=completed
+    )
+    app_module.save_primary_folder_settings(
+        preferences, incoming=incoming, completed=replacement
+    )
+    settings = IniSettings(preferences)
+    assert Path(settings.value(app_module.INCOMING_FOLDER_SETTING)) == incoming
+    assert Path(settings.value(app_module.COMPLETED_FOLDER_SETTING)) == replacement
+
+
+def test_identical_primary_folders_are_rejected(tmp_path, app_module):
+    folder = tmp_path / "same"
+    folder.mkdir()
+    result = app_module.validate_primary_folders(folder, folder)
+    assert not result.valid
+    assert "different" in result.error
+
+
+def test_michael_taylor_reversal_is_flagged(tmp_path, app_module):
+    root = tmp_path / "15060 Michael St Taylor"
+    prefinal = root / "15060 Michael St Taylor-Prefinal"
+    final = root / "15060 Michael St Taylor-Final"
+    prefinal.mkdir(parents=True)
+    final.mkdir()
+    textured_image().save(prefinal / "B-15060 Michael St Taylor-1.jpg", "JPEG")
+    result = app_module.validate_primary_folders(final, prefinal)
+    assert result.valid
+    assert any("reversed" in warning for warning in result.warnings)
+    assert any("no supported images" in warning for warning in result.warnings)
+
+
+def test_reversed_startup_state_uses_last_known_good_and_reports_warning(
+    tmp_path, app_module
+):
+    incoming, completed = make_primary_folders(tmp_path)
+    reversed_incoming = tmp_path / "House-Final"
+    reversed_completed = tmp_path / "House-Prefinal"
+    reversed_incoming.mkdir()
+    reversed_completed.mkdir()
+    textured_image().save(reversed_completed / "one.JPG", "JPEG")
+    preferences = tmp_path / "preferences.ini"
+    app_module._atomic_update_preferences(
+        preferences,
+        {
+            app_module.INCOMING_FOLDER_SETTING: str(reversed_incoming),
+            app_module.COMPLETED_FOLDER_SETTING: str(reversed_completed),
+            app_module.LAST_GOOD_INCOMING_SETTING: str(incoming),
+            app_module.LAST_GOOD_COMPLETED_SETTING: str(completed),
+        },
+    )
+    loaded_incoming, loaded_completed, result = app_module.load_primary_folder_settings(
+        IniSettings(preferences), incoming, completed
+    )
+    assert result.warnings
+    assert (loaded_incoming, loaded_completed) == (incoming, completed)
+
+
+def test_atomic_save_interruption_preserves_original_preferences(
+    tmp_path, app_module, monkeypatch
+):
+    incoming, completed = make_primary_folders(tmp_path)
+    preferences = tmp_path / "preferences.ini"
+    preferences.write_text("[folders]\nincoming=original\ncompleted=original-out\n")
+    original = preferences.read_bytes()
+
+    def interrupted_replace(source, destination):
+        raise OSError("simulated interrupted replace")
+
+    monkeypatch.setattr(app_module.os, "replace", interrupted_replace)
+    with pytest.raises(OSError, match="interrupted"):
+        app_module.save_primary_folder_settings(
+            preferences, incoming=incoming, completed=completed
+        )
+    assert preferences.read_bytes() == original
+    assert not list(tmp_path.glob(".preferences.ini.*.tmp"))
+
+
+def test_loading_valid_preferences_does_not_rewrite_them(tmp_path, app_module):
+    incoming, completed = make_primary_folders(tmp_path)
+    preferences = tmp_path / "preferences.ini"
+    app_module.save_primary_folder_settings(
+        preferences, incoming=incoming, completed=completed
+    )
+    before = preferences.read_bytes()
+    app_module.load_primary_folder_settings(IniSettings(preferences), incoming, completed)
+    assert preferences.read_bytes() == before
+
+
+def test_scanning_message_contains_exact_incoming_path(tmp_path, app_module):
+    incoming = tmp_path / "Folder With Spaces" / "Incoming"
+    incoming.mkdir(parents=True)
+    message = app_module.scanning_status_text(incoming, 0)
+    assert str(incoming) in message
+    assert "0 supported images found" in message
 
 
 def test_paid_confirmation_summarizes_only_checked_images(app_module):
