@@ -5,6 +5,7 @@ cd "$(dirname "$0")"
 
 APP_NAME="MyEstatePics AI Editor - Direct"
 BUNDLE_ID="com.myestatepics.aieditor.direct"
+RELEASE_VERSION="3.1.0"
 PYTHON="${PYTHON:-}"
 
 if [[ -z "$PYTHON" ]]; then
@@ -84,8 +85,8 @@ set_plist_string() {
 set_plist_string "CFBundleDisplayName" "$APP_NAME"
 set_plist_string "CFBundleName" "$APP_NAME"
 set_plist_string "CFBundleIdentifier" "$BUNDLE_ID"
-set_plist_string "CFBundleShortVersionString" "3.0.0"
-set_plist_string "CFBundleVersion" "3.0.0"
+set_plist_string "CFBundleShortVersionString" "$RELEASE_VERSION"
+set_plist_string "CFBundleVersion" "$RELEASE_VERSION"
 
 echo "Applying local ad-hoc signature after metadata updates..."
 codesign --force --deep --sign - "dist/$APP_NAME.app"

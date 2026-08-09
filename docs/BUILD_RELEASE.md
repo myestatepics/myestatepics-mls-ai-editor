@@ -114,9 +114,9 @@ PLIST="dist/MyEstatePics AI Editor - Direct.app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c \
   "Set :CFBundleIdentifier com.myestatepics.aieditor.direct" "$PLIST"
 /usr/libexec/PlistBuddy -c \
-  "Set :CFBundleShortVersionString 3.0.0" "$PLIST"
+  "Set :CFBundleShortVersionString 3.1.0" "$PLIST"
 /usr/libexec/PlistBuddy -c \
-  "Set :CFBundleVersion 3.0.0" "$PLIST"
+  "Set :CFBundleVersion 3.1.0" "$PLIST"
 plutil -lint "$PLIST"
 plutil -p "$PLIST"
 ```
@@ -127,8 +127,8 @@ Current metadata:
 | --- | --- |
 | Display/name | `MyEstatePics AI Editor - Direct` |
 | Bundle identifier | `com.myestatepics.aieditor.direct` |
-| Short version | `3.0.0` |
-| Bundle version | `3.0.0` |
+| Short version | `3.1.0` |
+| Bundle version | `3.1.0` |
 | Architecture | Apple Silicon |
 
 The bundle version mirrors the existing production installer metadata. This
@@ -138,9 +138,9 @@ documentation freeze does not change application versioning.
 
 ```bash
 test -f \
-  "dist/MyEstatePics AI Editor - Direct.app/Contents/Resources/prompts/mls_production.txt"
+  "dist/MyEstatePics AI Editor - Direct.app/Contents/Frameworks/prompts/mls_production.txt"
 cmp prompts/mls_production.txt \
-  "dist/MyEstatePics AI Editor - Direct.app/Contents/Resources/prompts/mls_production.txt"
+  "dist/MyEstatePics AI Editor - Direct.app/Contents/Frameworks/prompts/mls_production.txt"
 ! find "dist/MyEstatePics AI Editor - Direct.app" -type f -name '.env' -print -quit \
   | grep -q .
 ```
@@ -181,13 +181,13 @@ mkdir -p build/dmg
 ditto "dist/MyEstatePics AI Editor - Direct.app" \
   "build/dmg/MyEstatePics AI Editor - Direct.app"
 ln -s /Applications build/dmg/Applications
-rm -f "dist/MyEstatePics AI Editor - Direct.dmg"
+rm -f "dist/MyEstatePics AI Editor - Direct V3.1.dmg"
 hdiutil create \
   -volname "MyEstatePics AI Editor - Direct" \
   -srcfolder build/dmg \
   -ov \
   -format UDZO \
-  "dist/MyEstatePics AI Editor - Direct.dmg"
+  "dist/MyEstatePics AI Editor - Direct V3.1.dmg"
 ```
 
 ## Offline packaged smoke test
@@ -216,11 +216,11 @@ file \
   "dist/MyEstatePics AI Editor - Direct.app/Contents/MacOS/MyEstatePics AI Editor - Direct"
 codesign --verify --deep --strict \
   "dist/MyEstatePics AI Editor - Direct.app"
-hdiutil verify "dist/MyEstatePics AI Editor - Direct.dmg"
-shasum -a 256 "dist/MyEstatePics AI Editor - Direct.dmg"
+hdiutil verify "dist/MyEstatePics AI Editor - Direct V3.1.dmg"
+shasum -a 256 "dist/MyEstatePics AI Editor - Direct V3.1.dmg"
 du -sh \
   "dist/MyEstatePics AI Editor - Direct.app" \
-  "dist/MyEstatePics AI Editor - Direct.dmg"
+  "dist/MyEstatePics AI Editor - Direct V3.1.dmg"
 ```
 
 Mount the DMG and verify its app has the same prompt checksum, bundle
@@ -233,7 +233,7 @@ Generated artifacts remain untracked. Stage approved deliverables as:
 ```text
 release/<commit-short>-direct/
 ├── MyEstatePics AI Editor - Direct.app/
-└── MyEstatePics AI Editor - Direct.dmg
+└── MyEstatePics AI Editor - Direct V3.1.dmg
 ```
 
 Record the full source commit, DMG SHA-256, app and DMG sizes, architecture,

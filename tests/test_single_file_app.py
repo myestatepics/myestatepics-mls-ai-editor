@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-from PIL import Image
+from PIL import Image, JpegImagePlugin
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -66,7 +66,7 @@ def configure_tmp(module, tmp_path):
         directory.mkdir(parents=True, exist_ok=True)
 
 
-def test_mocked_end_to_end_preserves_filename_jpeg_limit_and_exif(tmp_path, app_module):
+def test_mocked_end_to_end_preserves_filename_exif_and_quality_100(tmp_path, app_module):
     configure_tmp(app_module, tmp_path)
     source = app_module.INPUT_DIR / "Living Room.JPG"
     exif = Image.Exif()
@@ -98,9 +98,14 @@ def test_mocked_end_to_end_preserves_filename_jpeg_limit_and_exif(tmp_path, app_
     output = app_module.OUTPUT_DIR / source.name
     assert output.exists()
     assert source.exists()
-    assert output.stat().st_size <= 2_000_000
     with Image.open(output) as result:
         assert result.format == "JPEG"
+        assert JpegImagePlugin.get_sampling(result) == 0
+        assert all(
+            value == 1
+            for quantization_table in result.quantization.values()
+            for value in quantization_table
+        )
         assert result.getexif()[274] == 1
         assert result.getexif()[315] == "MyEstatePics"
     assert summary.total_tokens == 30
@@ -160,6 +165,11 @@ def test_external_production_prompt_preserves_baseline_and_adds_architectural_fi
     assert "original paint color" in loaded_prompt
     assert "subtle natural illumination gradient" in loaded_prompt
     assert "Do not add clarity, sharpening, microcontrast" in loaded_prompt
+    assert "V3.1 RESTRAINED NATURAL WINDOW SKY" in loaded_prompt
+    assert "light, naturally photographed daytime MLS blue" in loaded_prompt
+    assert "Avoid royal blue, electric blue, deep blue" in loaded_prompt
+    assert "Never create a dramatic AI sky" in loaded_prompt
+    assert "Keep the existing strong window pull" in loaded_prompt
 
 
 def test_direct_images_edit_is_the_only_production_request(
@@ -211,8 +221,59 @@ def test_direct_images_edit_is_the_only_production_request(
 
 
 def test_application_and_prompt_versions_are_independent(app_module):
-    assert app_module.PROGRAM_VERSION == "3.0.0"
-    assert app_module.PROMPT_VERSION == "V3"
+    assert app_module.PROGRAM_VERSION == "3.1.0"
+    assert app_module.PROMPT_VERSION == "V3.1"
+
+
+def test_final_jpeg_is_quality_100_444_without_a_file_size_limit(tmp_path, app_module):
+    source = tmp_path / "source.jpg"
+    noise = np.random.default_rng(7).integers(
+        0, 256, size=(1600, 2000, 3), dtype=np.uint8
+    )
+    Image.fromarray(noise).save(source, format="JPEG", quality=95)
+
+    jpeg_bytes, quality = app_module.encode_final_jpeg(Image.fromarray(noise), source)
+
+    assert quality == 100
+    assert len(jpeg_bytes) > 2_000_000
+    with Image.open(BytesIO(jpeg_bytes)) as result:
+        assert result.size == (2000, 1600)
+        assert JpegImagePlugin.get_sampling(result) == 0
+        assert all(
+            value == 1
+            for quantization_table in result.quantization.values()
+            for value in quantization_table
+        )
+
+
+def test_large_jpeg_is_completed_without_size_based_review(tmp_path, app_module):
+    configure_tmp(app_module, tmp_path)
+    source = app_module.INPUT_DIR / "large.jpg"
+    noise = np.random.default_rng(11).integers(
+        0, 256, size=(1200, 1600, 3), dtype=np.uint8
+    )
+    Image.fromarray(noise).save(source, format="JPEG", quality=95)
+    response = SimpleNamespace(
+        data=[SimpleNamespace(b64_json=base64.b64encode(make_png(Image.fromarray(noise))).decode())],
+        usage=None,
+    )
+
+    class Images:
+        def __init__(self):
+            self.calls = 0
+
+        def edit(self, **kwargs):
+            self.calls += 1
+            return response
+
+    images = Images()
+    summary = app_module.process_batch(SimpleNamespace(images=images))
+
+    output = app_module.OUTPUT_DIR / source.name
+    assert images.calls == 1
+    assert summary.completed == 1
+    assert summary.review == 0
+    assert output.exists() and output.stat().st_size > 2_000_000
 
 
 def test_folder_scan_auto_loads_supported_images(tmp_path, app_module):

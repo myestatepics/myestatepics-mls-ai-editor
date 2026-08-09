@@ -111,10 +111,10 @@ not alone prevent Completed routing. Invalid dimensions and hard output-size
 failure also route to NeedsReview. Runtime exceptions create an Error text
 report rather than a processed image.
 
-JPEG encoding begins at quality 95 and attempts odd values down to 79 while targeting
-2,000,000 bytes. An oversize result is retained and routed for review. EXIF
-orientation is normalized to 1; safe EXIF and ICC data are retained where
-supported. Writes use a temporary file and `os.replace`.
+JPEG encoding uses one quality-100, 4:4:4 encode with no file-size target,
+quality reduction, or size-based review routing. EXIF orientation is normalized
+to 1; safe EXIF and ICC data are retained where supported. Writes use a
+temporary file and `os.replace`.
 
 ## Folder scanning and eligibility
 

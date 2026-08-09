@@ -36,7 +36,7 @@ Current verifier thresholds are implementation safeguards:
 | clipped-highlight fraction | REVIEW above 0.24 |
 | crushed-shadow fraction | REVIEW above 0.28 |
 | global chromaticity shift | REVIEW above 0.055 |
-| JPEG size | target at or below 2,000,000 bytes; attempts quality 95, 93, …, 79; retain and REVIEW if still oversize |
+| JPEG export | quality 100, 4:4:4, no file-size ceiling or size-based review routing |
 
 Chromaticity is a review signal, not proof of a particular material error.
 

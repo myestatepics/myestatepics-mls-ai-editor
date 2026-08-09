@@ -1,5 +1,5 @@
 """
-MyEstatePics MLS Interior Batch Editor — Production v2.0 RC1
+MyEstatePics MLS Interior Batch Editor — Production V3.1
 
 Workflow:
     Incoming/*.jpg or *.jpeg
@@ -12,7 +12,7 @@ Workflow:
             ↓
     Conservative verification and optional gentle sharpening
             ↓
-    JPEG, same filename, <= 2 MB
+    JPEG, same filename, quality 100 / 4:4:4
             ↓
     Completed/ or NeedsReview/
 
@@ -24,7 +24,7 @@ Important:
 - Logs API usage fields when the API returns them.
 - Uses the user's observed average cost only as a fallback estimate.
 - Automatic sharpening is disabled by default.
-- Oversized JPEGs are preserved and routed to NeedsReview instead of discarded.
+- JPEG file size does not affect routing or output quality.
 """
 
 import base64
@@ -137,8 +137,8 @@ DATA_DIR = RUNTIME_DIR / "Data"
 HISTORY_DB = DATA_DIR / "image_history.sqlite3"
 PROMPT_FILE = resource_path("prompts/mls_production.txt")
 
-PROGRAM_VERSION = "3.0.0"
-PROMPT_VERSION = "V3"
+PROGRAM_VERSION = "3.1.0"
+PROMPT_VERSION = "V3.1"
 MODEL = "gpt-image-2"
 QUALITY = "low"
 QUALITY_OPTIONS = ("low", "medium", "high")
@@ -149,10 +149,7 @@ PORTRAIT_SIZE = "1024x1536"
 SQUARE_SIZE = "1024x1024"
 IMAGES_EDIT_API_PATH = "/v1/images/edits"
 API_OUTPUT_FORMAT = "png"
-MAX_FILE_SIZE_BYTES = 2_000_000
-JPEG_START_QUALITY = 95
-JPEG_MIN_QUALITY = 78
-JPEG_QUALITY_STEP = 2
+JPEG_OUTPUT_QUALITY = 100
 DPI = (300, 300)
 OBSERVED_ESTIMATED_COST_PER_IMAGE = 0.28 / 6.0
 LOW_ESTIMATED_COST_PER_IMAGE = OBSERVED_ESTIMATED_COST_PER_IMAGE * 0.5
@@ -728,59 +725,37 @@ def get_icc_profile(input_file: Path) -> bytes | None:
         return image.info.get("icc_profile")
 
 
-def encode_jpeg_under_limit(
+def encode_final_jpeg(
     image: Image.Image,
     input_file: Path,
-) -> tuple[bytes, int, bool]:
+) -> tuple[bytes, int]:
     """
-    Convert to baseline JPEG.
+    Convert to one maximum-quality JPEG without a file-size target.
 
-    Returns:
-        jpeg_bytes, selected_quality, is_oversize
-
-    If the image cannot fit below 2 MB at the minimum quality, preserve the
-    best-quality minimum-quality JPEG and route it to NeedsReview instead of
-    discarding an otherwise usable edit.
+    The output retains the supplied image dimensions.  JPEG is inherently
+    compressed, but no quality reduction, resize, or repeat encode is applied
+    to make the file smaller.
     """
     image = image.convert("RGB")
     exif = get_preserved_exif(input_file, image.size)
     icc_profile = get_icc_profile(input_file)
+    buffer = BytesIO()
+    save_kwargs: dict[str, Any] = {
+        "format": "JPEG",
+        "quality": JPEG_OUTPUT_QUALITY,
+        "optimize": False,
+        "progressive": False,
+        "subsampling": 0,
+        "dpi": DPI,
+    }
 
-    last_bytes: bytes | None = None
-    last_quality = JPEG_MIN_QUALITY
+    if exif:
+        save_kwargs["exif"] = exif
+    if icc_profile:
+        save_kwargs["icc_profile"] = icc_profile
 
-    for quality in range(
-        JPEG_START_QUALITY,
-        JPEG_MIN_QUALITY - 1,
-        -JPEG_QUALITY_STEP,
-    ):
-        buffer = BytesIO()
-        save_kwargs: dict[str, Any] = {
-            "format": "JPEG",
-            "quality": quality,
-            "optimize": True,
-            "progressive": False,
-            "subsampling": 0,
-            "dpi": DPI,
-        }
-
-        if exif:
-            save_kwargs["exif"] = exif
-        if icc_profile:
-            save_kwargs["icc_profile"] = icc_profile
-
-        image.save(buffer, **save_kwargs)
-        jpeg_bytes = buffer.getvalue()
-        last_bytes = jpeg_bytes
-        last_quality = quality
-
-        if len(jpeg_bytes) <= MAX_FILE_SIZE_BYTES:
-            return jpeg_bytes, quality, False
-
-    if last_bytes is None:
-        raise RuntimeError("JPEG encoding failed before any output was created.")
-
-    return last_bytes, last_quality, True
+    image.save(buffer, **save_kwargs)
+    return buffer.getvalue(), JPEG_OUTPUT_QUALITY
 
 
 
@@ -1290,7 +1265,7 @@ def main() -> None:
     skipped = len(candidates) - len(pending)
 
     print("=" * 76)
-    print("MYESTATEPICS MLS AI — PRODUCTION v1.6")
+    print(f"MYESTATEPICS MLS AI — PRODUCTION v{PROGRAM_VERSION}")
     print(f"Images found: {len(candidates)}")
     print(f"Already completed/reviewed and skipped: {skipped}")
     print(f"Images to process: {len(pending)}")
@@ -1299,7 +1274,7 @@ def main() -> None:
         f"Fallback estimated cost: "
         f"${len(pending) * OBSERVED_ESTIMATED_COST_PER_IMAGE:.2f}"
     )
-    print("Outputs: JPEG, same filename, maximum 2 MB")
+    print("Outputs: JPEG, same filename, quality 100 / 4:4:4")
     print("Originals remain untouched in Incoming/")
     print("=" * 76)
 
@@ -1379,18 +1354,10 @@ def main() -> None:
                 sharpened,
             )
 
-            jpeg_bytes, jpeg_quality, oversize = encode_jpeg_under_limit(
+            jpeg_bytes, jpeg_quality = encode_final_jpeg(
                 generated_image,
                 input_file,
             )
-
-            if oversize:
-                if verification.status == "PASS":
-                    verification.status = "REVIEW"
-                verification.messages.append(
-                    f"JPEG remains above 2 MB at minimum quality {jpeg_quality}; "
-                    "saved for manual Lightroom export."
-                )
 
             if verification.status == "PASS":
                 destination_dir = OUTPUT_DIR
@@ -2179,7 +2146,7 @@ def process_batch(
                 input_file, generated_image
             )
             verification = compare_images(input_file, generated_image, sharpened)
-            jpeg_bytes, jpeg_quality, oversize = encode_jpeg_under_limit(
+            jpeg_bytes, jpeg_quality = encode_final_jpeg(
                 generated_image, input_file
             )
             review_reasons: list[str] = []
@@ -2190,11 +2157,6 @@ def process_batch(
                 )
             if verification.status == "FAIL":
                 review_reasons.extend(verification.messages)
-            if oversize:
-                review_reasons.append(
-                    f"JPEG remains above 2 MB at minimum quality {jpeg_quality}; "
-                    "saved for manual Lightroom export."
-                )
             if premium_finish_error:
                 review_reasons.append(premium_finish_error)
             needs_review_reason = " | ".join(dict.fromkeys(review_reasons))

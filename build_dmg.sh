@@ -4,8 +4,9 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 APP_NAME="MyEstatePics AI Editor - Direct"
+RELEASE_VERSION="V3.1"
 APP_PATH="dist/$APP_NAME.app"
-DMG_PATH="dist/$APP_NAME.dmg"
+DMG_PATH="dist/$APP_NAME $RELEASE_VERSION.dmg"
 STAGING_DIR="build/dmg"
 
 if [[ ! -d "$APP_PATH" ]]; then

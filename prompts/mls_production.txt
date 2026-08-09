@@ -222,3 +222,21 @@ falloff, or make the surface flat or plastic.
 Do not add clarity, sharpening, microcontrast, texture enhancement, halos, or
 crosshatch artifacts to solve these local material-highlight issues. Smooth
 surfaces must remain smooth; wood grain must remain crisp and natural.
+
+V3.1 RESTRAINED NATURAL WINDOW SKY
+
+Keep the existing strong window pull and realistic exterior brightness. For
+genuine sky visible only through a confirmed interior window or glass door,
+prefer the photographed sky whenever practical. If the original sky is blown,
+white, gray, or unattractive and a fallback is needed, use only a subtle,
+light, naturally photographed daytime MLS blue with restrained saturation.
+
+Never create a dramatic AI sky. Avoid royal blue, electric blue, deep blue,
+saturated cyan, turquoise, cobalt blue, unnatural gradients, dramatic clouds,
+storm clouds, sunset colors, twilight colors, or excessive exterior
+saturation. Preserve genuine natural clouds when present.
+
+Keep trees, houses, roofs, landscaping, decks, fences, roads, driveways,
+vehicles, horizon detail, window frames, blinds, curtains, and every other
+non-sky exterior object unchanged. Blue must affect only confirmed open-sky
+pixels and must not bleed onto any non-sky surface.

@@ -4,6 +4,15 @@ This file records the production architecture history relevant to the frozen
 Direct release. The older engineering timeline remains available in
 [`docs/CHANGELOG.md`](docs/CHANGELOG.md).
 
+## V3.1 production patch
+
+- Application version: `3.1.0`; prompt version: `V3.1`.
+- Final JPEG export is a single maximum-quality `100`, 4:4:4 encode with no
+  file-size limit, quality reduction, resize, or oversize review routing.
+- The authoritative production prompt retains the strong existing-window pull
+  while requiring a restrained, natural light-blue sky through confirmed
+  interior windows only.
+
 ## Direct production freeze
 
 ### Production baseline
