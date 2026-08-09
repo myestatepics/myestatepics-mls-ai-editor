@@ -3,8 +3,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-APP_NAME="MyEstatePics AI Editor"
-BUNDLE_ID="com.myestatepics.aieditor"
+APP_NAME="MyEstatePics AI Editor - Direct"
+BUNDLE_ID="com.myestatepics.aieditor.direct"
 PYTHON="${PYTHON:-}"
 
 if [[ -z "$PYTHON" ]]; then
@@ -35,7 +35,8 @@ PYINSTALLER_ARGS=(
     --onedir
     --name "$APP_NAME"
     --osx-bundle-identifier "$BUNDLE_ID"
-    --add-data "prompts:prompts"
+    --runtime-hook "packaging/direct_runtime.py"
+    --add-data "prompts/mls_production.txt:prompts"
 )
 
 for resource_dir in config icons resources templates; do
@@ -83,8 +84,8 @@ set_plist_string() {
 set_plist_string "CFBundleDisplayName" "$APP_NAME"
 set_plist_string "CFBundleName" "$APP_NAME"
 set_plist_string "CFBundleIdentifier" "$BUNDLE_ID"
-set_plist_string "CFBundleShortVersionString" "2.1 RC1"
-set_plist_string "CFBundleVersion" "2.1.0"
+set_plist_string "CFBundleShortVersionString" "3.0.0"
+set_plist_string "CFBundleVersion" "3.0.0"
 
 echo "Applying local ad-hoc signature after metadata updates..."
 codesign --force --deep --sign - "dist/$APP_NAME.app"

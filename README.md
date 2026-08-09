@@ -17,7 +17,7 @@ and protection of mirrors and reflections.
 
 - Production source baseline before this documentation freeze:
   `b5b6b231d626551198f5e440f0faa4be99d03020`
-- Application badge: `Production v2.1 RC1`
+- Application badge: `Production v3.0.0` / `Prompt V3`
 - Prompt badge: `Prompt v2.0 RC1`
 - Production model: `gpt-image-2`
 - Production endpoint: `/v1/images/edits`

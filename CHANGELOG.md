@@ -84,3 +84,5 @@ verification, retry behavior, CSV logging, SQLite history, and the conservative
 MLS correction prompt. Later releases added the GUI, selected-file processing,
 Demo Mode, current-output-only reprocessing, Application Support packaging,
 automatic selection, architectural safeguards, and cooperative cancellation.
+- V3 production stabilization: safe path-setting recovery, explicit Low/Medium/High
+  selection, V3 prompt controls, local Premium Finish, and stage timing logs.

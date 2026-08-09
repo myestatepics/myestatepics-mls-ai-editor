@@ -31,6 +31,7 @@ import base64
 import atexit
 import configparser
 import csv
+import hashlib
 import logging
 import os
 import shutil
@@ -136,11 +137,12 @@ DATA_DIR = RUNTIME_DIR / "Data"
 HISTORY_DB = DATA_DIR / "image_history.sqlite3"
 PROMPT_FILE = resource_path("prompts/mls_production.txt")
 
-PROGRAM_VERSION = "2.1 RC1"
-PROMPT_VERSION = "2.0 RC1"
+PROGRAM_VERSION = "3.0.0"
+PROMPT_VERSION = "V3"
 MODEL = "gpt-image-2"
 QUALITY = "low"
-QUALITY_OPTIONS = ("low", "medium")
+QUALITY_OPTIONS = ("low", "medium", "high")
+QUALITY_SETTING = "ui/quality"
 SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 LANDSCAPE_SIZE = "1536x1024"
 PORTRAIT_SIZE = "1024x1536"
@@ -154,6 +156,7 @@ JPEG_QUALITY_STEP = 2
 DPI = (300, 300)
 OBSERVED_ESTIMATED_COST_PER_IMAGE = 0.28 / 6.0
 LOW_ESTIMATED_COST_PER_IMAGE = OBSERVED_ESTIMATED_COST_PER_IMAGE * 0.5
+HIGH_ESTIMATED_COST_PER_IMAGE = OBSERVED_ESTIMATED_COST_PER_IMAGE * 2.0
 MAX_RETRIES = 3
 RETRY_BASE_DELAY_SECONDS = 3
 NORMALIZED_LONG_EDGE = 1024
@@ -220,6 +223,13 @@ def configure_startup_logging() -> Path:
     logging.info("Resource directory: %s", RESOURCE_DIR)
     logging.info("User data directory: %s", USER_DATA_DIR)
     logging.info("Prompt resource: %s", PROMPT_FILE)
+    if PROMPT_FILE.is_file():
+        logging.info(
+            "Production Prompt Version: %s source=%s sha256=%s",
+            PROMPT_VERSION,
+            PROMPT_FILE,
+            hashlib.sha256(PROMPT_FILE.read_bytes()).hexdigest(),
+        )
 
     def log_uncaught_exception(exception_type, exception, traceback):
         logging.critical(
@@ -306,6 +316,12 @@ def load_prompt() -> str:
     if not prompt:
         raise ValueError(f"Prompt file is empty: {PROMPT_FILE}")
     return prompt
+
+
+def normalize_quality_setting(value: Any, default: str = "low") -> str:
+    """Keep an existing explicit choice; never infer a more expensive quality."""
+    candidate = str(value).strip().lower() if value is not None else ""
+    return candidate if candidate in QUALITY_OPTIONS else default
 
 
 def choose_native_size(input_file: Path) -> str:
@@ -608,7 +624,9 @@ def call_image_editor(
     client: OpenAI,
     input_file: Path,
     full_prompt: str,
+    quality: str | None = None,
 ) -> tuple[bytes, str, ApiUsage]:
+    quality = normalize_quality_setting(quality, QUALITY)
     requested_size = choose_native_size(input_file)
     last_error: Exception | None = None
 
@@ -619,7 +637,7 @@ def call_image_editor(
                 "quality=%s requested_size=%s output_format=%s attempt=%d/%d",
                 IMAGES_EDIT_API_PATH,
                 MODEL,
-                QUALITY,
+                quality,
                 requested_size,
                 API_OUTPUT_FORMAT,
                 attempt,
@@ -631,7 +649,7 @@ def call_image_editor(
                     image=image_file,
                     prompt=full_prompt,
                     size=requested_size,
-                    quality=QUALITY,
+                    quality=quality,
                     output_format=API_OUTPUT_FORMAT,
                 )
 
@@ -647,7 +665,7 @@ def call_image_editor(
                 "output_format=%s attempt=%d/%d cost_basis=estimated",
                 IMAGES_EDIT_API_PATH,
                 MODEL,
-                QUALITY,
+                quality,
                 requested_size,
                 returned_size,
                 returned_format.lower(),
@@ -895,6 +913,22 @@ def maybe_apply_gentle_sharpening(
         return sharpened, True
 
     return generated_image, False
+
+
+def apply_premium_finish(generated_image: Image.Image) -> Image.Image:
+    """Apply the conservative, local-only V3 finish without changing geometry.
+
+    This intentionally uses only Pillow and a restrained existing UnsharpMask
+    configuration. It performs no analysis, networking, resizing, cropping,
+    object removal, or content generation.
+    """
+    rgb = generated_image.convert("RGB")
+    # A light blend avoids the aggressive texture amplification rejected in
+    # earlier experiments while improving edge definition on finished output.
+    refined = rgb.filter(
+        ImageFilter.UnsharpMask(radius=0.45, percent=12, threshold=12)
+    )
+    return Image.blend(rgb, refined, 0.12)
 
 
 def write_error_report(input_file: Path, error: Exception) -> None:
@@ -1163,6 +1197,11 @@ def append_log(log_path: Path, row: dict[str, object]) -> None:
         "usage_total_tokens",
         "usage_raw",
         "fallback_estimated_cost",
+        "image_preparation_seconds",
+        "api_latency_seconds",
+        "response_decode_seconds",
+        "premium_finish_seconds",
+        "filesystem_write_seconds",
         "message",
     ]
 
@@ -1579,6 +1618,8 @@ def estimated_cost_per_image(quality: str) -> float:
     """Fallback estimate scaled from the preserved observed medium-quality cost."""
     if quality == "low":
         return LOW_ESTIMATED_COST_PER_IMAGE
+    if quality == "high":
+        return HIGH_ESTIMATED_COST_PER_IMAGE
     return OBSERVED_ESTIMATED_COST_PER_IMAGE
 
 
@@ -1703,13 +1744,29 @@ def save_primary_folder_settings(
 def load_primary_folder_settings(
     settings: Any, default_incoming: Path, default_completed: Path
 ) -> tuple[Path, Path, FolderIntegrityResult]:
-    incoming = Path(settings.value(INCOMING_FOLDER_SETTING, str(default_incoming)))
-    completed = Path(settings.value(COMPLETED_FOLDER_SETTING, str(default_completed)))
+    incoming = normalize_path_setting(
+        raw_ini_setting(settings, INCOMING_FOLDER_SETTING, str(default_incoming)),
+        default_incoming,
+        INCOMING_FOLDER_SETTING,
+    )
+    completed = normalize_path_setting(
+        raw_ini_setting(settings, COMPLETED_FOLDER_SETTING, str(default_completed)),
+        default_completed,
+        COMPLETED_FOLDER_SETTING,
+    )
     result = validate_primary_folders(incoming, completed)
     if result.valid and not result.warnings:
         return incoming, completed, result
-    last_incoming = Path(settings.value(LAST_GOOD_INCOMING_SETTING, str(default_incoming)))
-    last_completed = Path(settings.value(LAST_GOOD_COMPLETED_SETTING, str(default_completed)))
+    last_incoming = normalize_path_setting(
+        raw_ini_setting(settings, LAST_GOOD_INCOMING_SETTING, str(default_incoming)),
+        default_incoming,
+        LAST_GOOD_INCOMING_SETTING,
+    )
+    last_completed = normalize_path_setting(
+        raw_ini_setting(settings, LAST_GOOD_COMPLETED_SETTING, str(default_completed)),
+        default_completed,
+        LAST_GOOD_COMPLETED_SETTING,
+    )
     last_result = validate_primary_folders(last_incoming, last_completed)
     if last_result.valid and not last_result.warnings:
         return last_incoming, last_completed, result
@@ -1801,7 +1858,7 @@ def paid_confirmation_text(
         f"Quality: {quality.title()}\n"
         f"Estimated cost: ${estimated_cost:.2f}\n"
         "Demo Mode: Off\n"
-        f"Prompt: MLS Production v{PROMPT_VERSION}"
+        f"Prompt: MLS Production {PROMPT_VERSION}"
     )
 
 
@@ -1814,9 +1871,49 @@ def retry_confirmation_text(filename: str, quality: str) -> str:
     )
 
 
+def normalize_path_setting(value: Any, default: Path, setting_key: str) -> Path:
+    """Safely recover one macOS path without ever splitting punctuation."""
+    candidate = value
+    if isinstance(candidate, (list, tuple)):
+        if len(candidate) == 1:
+            candidate = candidate[0]
+            logging.warning("Recovered one-item legacy path setting: key=%s", setting_key)
+        else:
+            logging.warning("Rejected malformed path setting: key=%s type=%s", setting_key, type(value).__name__)
+            return Path(default)
+    if candidate is None:
+        logging.warning("Missing path setting: key=%s; using fallback", setting_key)
+        return Path(default)
+    try:
+        text = os.fspath(candidate).strip() if isinstance(candidate, os.PathLike) else str(candidate).strip()
+        if not text or text.startswith("[") or text.startswith("("):
+            raise ValueError("empty or malformed path value")
+        return Path(text)
+    except (TypeError, ValueError):
+        logging.warning("Rejected malformed path setting: key=%s; using fallback", setting_key)
+        return Path(default)
+
+
+def raw_ini_setting(settings: Any, setting_key: str, default: Any) -> Any:
+    """Read a raw INI scalar before Qt can coerce comma-containing paths to a list."""
+    file_name_method = getattr(settings, "fileName", None)
+    if callable(file_name_method):
+        try:
+            file_name = Path(file_name_method())
+            if file_name.is_file():
+                parser = configparser.ConfigParser(interpolation=None)
+                parser.read(file_name, encoding="utf-8")
+                section, option = setting_key.split("/", 1)
+                if parser.has_option(section, option):
+                    return parser.get(section, option, raw=True)
+        except (OSError, TypeError, ValueError, configparser.Error):
+            logging.warning("Could not read raw INI setting: key=%s", setting_key)
+    return settings.value(setting_key, default)
+
+
 def load_folder_settings(settings: Any, defaults: tuple[Path, ...]) -> tuple[Path, ...]:
     return tuple(
-        Path(settings.value(key, str(default)))
+        normalize_path_setting(raw_ini_setting(settings, key, str(default)), default, key)
         for key, default in zip(FOLDER_SETTING_KEYS, defaults)
     )
 
@@ -2001,6 +2098,11 @@ def _log_row(
             if status in {"PASS", "REVIEW", "FAIL"}
             else ""
         ),
+        "image_preparation_seconds": f"{metrics.get('timings', {}).get('image_preparation_seconds', 0.0):.3f}",
+        "api_latency_seconds": f"{metrics.get('timings', {}).get('api_latency_seconds', 0.0):.3f}",
+        "response_decode_seconds": f"{metrics.get('timings', {}).get('response_decode_seconds', 0.0):.3f}",
+        "premium_finish_seconds": f"{metrics.get('timings', {}).get('premium_finish_seconds', 0.0):.3f}",
+        "filesystem_write_seconds": f"{metrics.get('timings', {}).get('filesystem_write_seconds', 0.0):.3f}",
         "message": message,
     }
 
@@ -2045,16 +2147,34 @@ def process_batch(
         usage = ApiUsage()
         image_started = time.perf_counter()
         api_call_completed = False
+        timings: dict[str, float] = {}
         try:
+            preparation_started = time.perf_counter()
             metrics = analyze_input(input_file)
             prompt = f"{base_prompt}\n\n{build_adaptive_addendum(metrics)}"
+            timings["image_preparation_seconds"] = time.perf_counter() - preparation_started
+            api_started = time.perf_counter()
             generated_bytes, requested_size, usage = call_image_editor(
-                client, input_file, prompt
+                client, input_file, prompt, quality
             )
+            timings["api_latency_seconds"] = time.perf_counter() - api_started
             api_call_completed = True
             summary.api_calls += 1
+            decode_started = time.perf_counter()
             with Image.open(BytesIO(generated_bytes)) as generated:
                 generated_image = generated.convert("RGB")
+            timings["response_decode_seconds"] = time.perf_counter() - decode_started
+            premium_started = time.perf_counter()
+            premium_finish_error = ""
+            try:
+                generated_image = apply_premium_finish(generated_image)
+            except Exception as premium_error:
+                premium_finish_error = (
+                    f"Premium Finish failed locally: {type(premium_error).__name__}: "
+                    f"{premium_error}"
+                )
+                logging.exception("Premium Finish failed; preserving successful API image")
+            timings["premium_finish_seconds"] = time.perf_counter() - premium_started
             generated_image, sharpened = maybe_apply_gentle_sharpening(
                 input_file, generated_image
             )
@@ -2075,10 +2195,14 @@ def process_batch(
                     f"JPEG remains above 2 MB at minimum quality {jpeg_quality}; "
                     "saved for manual Lightroom export."
                 )
+            if premium_finish_error:
+                review_reasons.append(premium_finish_error)
             needs_review_reason = " | ".join(dict.fromkeys(review_reasons))
             routing_status = "REVIEW" if needs_review_reason else "PASS"
             destination = REVIEW_DIR if needs_review_reason else OUTPUT_DIR
+            filesystem_started = time.perf_counter()
             _atomic_write(destination / input_file.name, jpeg_bytes)
+            timings["filesystem_write_seconds"] = time.perf_counter() - filesystem_started
             if destination == OUTPUT_DIR:
                 summary.completed += 1
             else:
@@ -2090,6 +2214,17 @@ def process_batch(
             summary.total_tokens += usage.total_tokens or 0
             message = needs_review_reason or " | ".join(verification.messages)
             image_elapsed = time.perf_counter() - image_started
+            timings["total_processing_seconds"] = image_elapsed
+            metrics["timings"] = timings
+            logging.info(
+                "Image timing: filename=%s quality=%s api_latency=%.3f preparation=%.3f "
+                "decode=%.3f premium_finish=%.3f filesystem=%.3f total=%.3f",
+                input_file.name, quality, timings.get("api_latency_seconds", 0.0),
+                timings.get("image_preparation_seconds", 0.0),
+                timings.get("response_decode_seconds", 0.0),
+                timings.get("premium_finish_seconds", 0.0),
+                timings.get("filesystem_write_seconds", 0.0), image_elapsed,
+            )
             image_cost = estimated_cost_per_image(quality)
             append_log(
                 log_path,
@@ -2446,7 +2581,6 @@ def launch_gui() -> int:
     app_stylesheet = """
         QWidget {
             color: #172033;
-            font-family: "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
             font-size: 13px;
         }
         QMainWindow, QWidget#appRoot, QScrollArea { background: #f4f6fa; border: none; }
@@ -2509,7 +2643,7 @@ def launch_gui() -> int:
         }
         QPlainTextEdit {
             background: #101828; color: #d0d5dd; border: 1px solid #344054;
-            border-radius: 9px; padding: 10px; font-family: Menlo, monospace; font-size: 11px;
+            border-radius: 9px; padding: 10px; font-family: monospace; font-size: 11px;
         }
         QProgressBar {
             background: #eaecf0; border: none; border-radius: 5px; height: 10px; text-align: center;
@@ -2880,8 +3014,11 @@ def launch_gui() -> int:
             )
 
             self.quality = QComboBox()
-            self.quality.addItems(["Low", "Medium"])
-            self.quality.setCurrentText("Low")
+            self.quality.addItems(["LOW", "MEDIUM", "HIGH"])
+            saved_quality = normalize_quality_setting(
+                self.settings.value(QUALITY_SETTING, "low"), "low"
+            )
+            self.quality.setCurrentText(saved_quality.upper())
             self.demo_checkbox = QCheckBox("Demo Mode — No API Charges")
             self.demo_checkbox.toggled.connect(self.on_demo_toggled)
             self.architecture_lock = QCheckBox("Conservative Architecture Lock")
@@ -3047,6 +3184,7 @@ def launch_gui() -> int:
                     "ui/demo_mode": (
                         "true" if self.demo_checkbox.isChecked() else "false"
                     ),
+                    QUALITY_SETTING: self.quality.currentText().lower(),
                 },
             )
             logging.info(
@@ -3366,8 +3504,11 @@ def launch_gui() -> int:
 
         def on_quality_changed(self, quality):
             global QUALITY
-            QUALITY = quality.lower()
-            self.log.appendPlainText(f"Quality selected: {quality}")
+            QUALITY = normalize_quality_setting(quality, "low")
+            _atomic_update_preferences(
+                self.preferences_path, {QUALITY_SETTING: QUALITY}
+            )
+            self.log.appendPlainText(f"Quality selected: {QUALITY.upper()}")
             self.update_job_summary()
 
         def open_env(self):

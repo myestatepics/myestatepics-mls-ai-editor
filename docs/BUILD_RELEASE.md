@@ -80,7 +80,7 @@ Run from the repository root:
   --name "MyEstatePics AI Editor - Direct" \
   --osx-bundle-identifier "com.myestatepics.aieditor.direct" \
   --runtime-hook packaging/direct_runtime.py \
-  --add-data "prompts:prompts" \
+  --add-data "prompts/mls_production.txt:prompts" \
   myestatepics_ai_editor.py
 ```
 
@@ -114,9 +114,9 @@ PLIST="dist/MyEstatePics AI Editor - Direct.app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c \
   "Set :CFBundleIdentifier com.myestatepics.aieditor.direct" "$PLIST"
 /usr/libexec/PlistBuddy -c \
-  "Set :CFBundleShortVersionString 2.1 RC1" "$PLIST"
+  "Set :CFBundleShortVersionString 3.0.0" "$PLIST"
 /usr/libexec/PlistBuddy -c \
-  "Set :CFBundleVersion 2.1.0" "$PLIST"
+  "Set :CFBundleVersion 3.0.0" "$PLIST"
 plutil -lint "$PLIST"
 plutil -p "$PLIST"
 ```
@@ -127,8 +127,8 @@ Current metadata:
 | --- | --- |
 | Display/name | `MyEstatePics AI Editor - Direct` |
 | Bundle identifier | `com.myestatepics.aieditor.direct` |
-| Short version | `2.1 RC1` |
-| Bundle version | `2.1.0` |
+| Short version | `3.0.0` |
+| Bundle version | `3.0.0` |
 | Architecture | Apple Silicon |
 
 The bundle version mirrors the existing production installer metadata. This

@@ -168,3 +168,32 @@ furniture placement.
 The objective is to improve the photograph, not redesign it. If uncertain
 whether an area is genuine exterior sky or another surface, preserve the
 photographed region unchanged.
+
+HARDWOOD FLOOR CONTINUITY
+
+Treat one continuous hardwood floor as one photographed material. Preserve its
+exact original wood color, grain, plank pattern, plank geometry, directional
+light, and legitimate reflections. Correct only localized excessive highlight,
+washed-out exposure, color contamination, or white-balance inconsistency so
+the same floor reads naturally as one continuous surface. Never recolor,
+replace, flatten, invent grain, erase real grain, or alter plank geometry.
+
+WALL AND CEILING CONTINUITY
+
+Preserve exact original paint color, material, architecture, natural light
+falloff, corners, real shadows, trim, molding, outlets, switches, vents,
+fixtures, doors, and openings. Correct only artificial localized highlight,
+darkness, white-balance drift, color contamination, gray patches, dark
+patches, dirty blotches, cloudy spots, faint wavy tonal variation, or AI-made
+mottling on otherwise smooth neutral walls and ceilings. Do not repaint,
+recolor, flatten, plasticize, erase legitimate shadows, erase features, or
+manufacture texture.
+
+MIRROR AND PHOTOGRAPHY-EQUIPMENT REFLECTIONS
+
+If a real mirror or clear reflective surface visibly contains only a
+photographer, camera, tripod, phone, or obvious photography equipment,
+remove that photography-related reflection cleanly and reconstruct only the
+physically plausible reflected continuation already implied by the source.
+Do not change mirror size, position, frame, reflected room geometry, doors,
+windows, walls, furniture, architecture, or legitimate reflected objects.

@@ -150,6 +150,9 @@ def test_external_production_prompt_preserves_baseline_and_adds_architectural_fi
     assert "complete exterior view." in loaded_prompt
     assert "Never create a fake window" in loaded_prompt
     assert "outdoor scenery inside a mirror" in loaded_prompt
+    assert "HARDWOOD FLOOR CONTINUITY" in loaded_prompt
+    assert "WALL AND CEILING CONTINUITY" in loaded_prompt
+    assert "MIRROR AND PHOTOGRAPHY-EQUIPMENT REFLECTIONS" in loaded_prompt
 
 
 def test_direct_images_edit_is_the_only_production_request(
@@ -201,8 +204,8 @@ def test_direct_images_edit_is_the_only_production_request(
 
 
 def test_application_and_prompt_versions_are_independent(app_module):
-    assert app_module.PROGRAM_VERSION == "2.1 RC1"
-    assert app_module.PROMPT_VERSION == "2.0 RC1"
+    assert app_module.PROGRAM_VERSION == "3.0.0"
+    assert app_module.PROMPT_VERSION == "V3"
 
 
 def test_folder_scan_auto_loads_supported_images(tmp_path, app_module):
@@ -495,7 +498,7 @@ def test_paid_confirmation_summarizes_only_checked_images(app_module):
     assert "Quality: Medium" in text
     assert "Estimated cost: $0.32" in text
     assert "Demo Mode: Off" in text
-    assert "Prompt: MLS Production v2.0 RC1" in text
+    assert "Prompt: MLS Production V3" in text
 
 
 def test_retry_confirmation_queues_without_claiming_to_start(app_module):
@@ -504,6 +507,127 @@ def test_retry_confirmation_queues_without_claiming_to_start(app_module):
     assert "Quality: Low" in text
     assert "Estimated additional cost:" in text
     assert "will not start automatically" in text
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ("low", "low"),
+        ("MEDIUM", "medium"),
+        ("HIGH", "high"),
+        ("auto", "low"),
+        (None, "low"),
+    ],
+)
+def test_v3_quality_normalization_never_allows_auto(app_module, value, expected):
+    assert app_module.normalize_quality_setting(value) == expected
+
+
+@pytest.mark.parametrize(
+    "quality",
+    ["low", "medium", "high"],
+)
+def test_each_explicit_v3_quality_makes_one_edit_request(
+    tmp_path, app_module, quality
+):
+    configure_tmp(app_module, tmp_path)
+    source = app_module.INPUT_DIR / f"{quality}.jpg"
+    image = textured_image()
+    image.save(source, format="JPEG")
+    calls = []
+
+    class Images:
+        def edit(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                data=[SimpleNamespace(b64_json=base64.b64encode(make_png(image)).decode())],
+                usage=None,
+            )
+
+    summary = app_module.process_batch(
+        SimpleNamespace(images=Images()), quality=quality
+    )
+    assert summary.api_calls == 1
+    assert len(calls) == 1
+    assert calls[0]["quality"] == quality
+    assert calls[0]["quality"] != "auto"
+
+
+def test_path_normalization_preserves_commas_and_punctuation(app_module):
+    exact = Path(
+        "/Users/subratmohapatra/Documents/MyestatePics/2026/29501 brown ct , gardencity/test"
+    )
+    for value in (str(exact), [str(exact)], (str(exact),)):
+        assert app_module.normalize_path_setting(value, Path("/fallback"), "folders/incoming") == exact
+    assert app_module.normalize_path_setting(
+        ["first", "second"], Path("/fallback"), "folders/incoming"
+    ) == Path("/fallback")
+
+
+def test_primary_folder_settings_use_raw_ini_scalar_for_comma_paths(tmp_path, app_module):
+    incoming = tmp_path / "29501 brown ct , gardencity-Prefinal"
+    completed = tmp_path / "29501 brown ct , gardencity-Final"
+    incoming.mkdir()
+    completed.mkdir()
+    preferences = tmp_path / "preferences.ini"
+    preferences.write_text(
+        "[folders]\n"
+        f"incoming={incoming}\n"
+        f"completed={completed}\n"
+        f"last_good_incoming={incoming}\n"
+        f"last_good_completed={completed}\n",
+        encoding="utf-8",
+    )
+
+    class QtListSettings:
+        def fileName(self):
+            return str(preferences)
+
+        def value(self, key, default):
+            return str(default).split(",")
+
+    loaded_incoming, loaded_completed, result = app_module.load_primary_folder_settings(
+        QtListSettings(), tmp_path / "fallback-incoming", tmp_path / "fallback-completed"
+    )
+    assert result.valid
+    assert loaded_incoming == incoming
+    assert loaded_completed == completed
+
+
+def test_premium_finish_is_local_and_preserves_dimensions(app_module):
+    image = textured_image((121, 79))
+    finished = app_module.apply_premium_finish(image)
+    assert finished.size == image.size
+    assert finished.mode == "RGB"
+
+
+def test_premium_finish_failure_never_retries_successful_api_response(
+    tmp_path, app_module, monkeypatch
+):
+    configure_tmp(app_module, tmp_path)
+    source = app_module.INPUT_DIR / "premium-failure.jpg"
+    image = textured_image()
+    image.save(source, format="JPEG")
+    calls = []
+
+    class Images:
+        def edit(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                data=[SimpleNamespace(b64_json=base64.b64encode(make_png(image)).decode())],
+                usage=None,
+            )
+
+    monkeypatch.setattr(
+        app_module,
+        "apply_premium_finish",
+        lambda image: (_ for _ in ()).throw(RuntimeError("local finish failure")),
+    )
+    summary = app_module.process_batch(SimpleNamespace(images=Images()), quality="low")
+    assert len(calls) == 1
+    assert summary.api_calls == 1
+    assert summary.review == 1
+    assert (app_module.REVIEW_DIR / source.name).exists()
 
 
 def test_review_actions_move_accept_and_delete_outputs(tmp_path, app_module):
