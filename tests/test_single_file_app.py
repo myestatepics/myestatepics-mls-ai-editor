@@ -153,6 +153,13 @@ def test_external_production_prompt_preserves_baseline_and_adds_architectural_fi
     assert "HARDWOOD FLOOR CONTINUITY" in loaded_prompt
     assert "WALL AND CEILING CONTINUITY" in loaded_prompt
     assert "MIRROR AND PHOTOGRAPHY-EQUIPMENT REFLECTIONS" in loaded_prompt
+    assert "LOCAL MATERIAL HIGHLIGHT PROTECTION" in loaded_prompt
+    assert "Do not globally darken the photograph" in loaded_prompt
+    assert "preserve the real directional light and natural transition into shade" in loaded_prompt
+    assert "Never remove legitimate sunlight" in loaded_prompt
+    assert "original paint color" in loaded_prompt
+    assert "subtle natural illumination gradient" in loaded_prompt
+    assert "Do not add clarity, sharpening, microcontrast" in loaded_prompt
 
 
 def test_direct_images_edit_is_the_only_production_request(

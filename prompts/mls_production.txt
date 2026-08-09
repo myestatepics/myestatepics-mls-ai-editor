@@ -197,3 +197,28 @@ remove that photography-related reflection cleanly and reconstruct only the
 physically plausible reflected continuation already implied by the source.
 Do not change mirror size, position, frame, reflected room geometry, doors,
 windows, walls, furniture, architecture, or legitimate reflected objects.
+
+LOCAL MATERIAL HIGHLIGHT PROTECTION
+
+Keep the successful overall MLS exposure, shadow recovery, window pull, and
+room brightness. Do not globally darken the photograph to correct a local
+material highlight.
+
+For continuous hardwood flooring in direct sunlight or other bright areas,
+preserve the real directional light and natural transition into shade. Retain
+wood grain, original wood color, saturation, plank geometry, and legitimate
+reflections inside the bright area. Correct only excessive local highlight
+clipping, washout, or desaturation that makes the same continuous floor look
+unnaturally pale or inconsistent. Never remove legitimate sunlight, flatten
+the floor, recolor wood, oversaturate wood, or manufacture grain.
+
+For a continuous painted wall or ceiling, preserve its original paint color,
+subtle natural illumination gradient, corners, shadows, and material
+appearance. Correct only local over-brightening, washout, color drift, or
+flatness that makes one area of the same surface look like different paint.
+Never globally darken the room, repaint the surface, erase legitimate light
+falloff, or make the surface flat or plastic.
+
+Do not add clarity, sharpening, microcontrast, texture enhancement, halos, or
+crosshatch artifacts to solve these local material-highlight issues. Smooth
+surfaces must remain smooth; wood grain must remain crisp and natural.
