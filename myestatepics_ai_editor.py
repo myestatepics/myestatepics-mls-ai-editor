@@ -1,5 +1,5 @@
 """
-MyEstatePics MLS Interior Batch Editor — Production V3.1
+MyEstatePics MLS Interior Batch Editor — Production V3.1.1
 
 Workflow:
     Incoming/*.jpg or *.jpeg
@@ -50,6 +50,10 @@ import numpy as np
 from openai import OpenAI
 from PIL import Image, ImageFilter
 from dotenv import dotenv_values, load_dotenv
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import landscape, letter
+from reportlab.lib.utils import ImageReader
+from reportlab.pdfgen import canvas
 
 
 DEFAULT_APPLICATION_NAME = "MyEstatePics AI Editor"
@@ -137,8 +141,8 @@ DATA_DIR = RUNTIME_DIR / "Data"
 HISTORY_DB = DATA_DIR / "image_history.sqlite3"
 PROMPT_FILE = resource_path("prompts/mls_production.txt")
 
-PROGRAM_VERSION = "3.1.0"
-PROMPT_VERSION = "V3.1"
+PROGRAM_VERSION = "3.1.1"
+PROMPT_VERSION = "V3.1.1"
 MODEL = "gpt-image-2"
 QUALITY = "low"
 QUALITY_OPTIONS = ("low", "medium", "high")
@@ -150,6 +154,8 @@ SQUARE_SIZE = "1024x1024"
 IMAGES_EDIT_API_PATH = "/v1/images/edits"
 API_OUTPUT_FORMAT = "png"
 JPEG_OUTPUT_QUALITY = 100
+REVIEW_PDF_VERSION = "V3.1.1"
+REVIEW_PDF_MAX_IMAGE_EDGE = 1200
 DPI = (300, 300)
 OBSERVED_ESTIMATED_COST_PER_IMAGE = 0.28 / 6.0
 LOW_ESTIMATED_COST_PER_IMAGE = OBSERVED_ESTIMATED_COST_PER_IMAGE * 0.5
@@ -1554,6 +1560,9 @@ class BatchSummary:
     api_calls: int = 0
     fallback_cost: float = 0.0
     log_path: Path | None = None
+    before_pdf: Path | None = None
+    after_pdf: Path | None = None
+    review_pdf_error: str = ""
     quality: str = "low"
     elapsed_seconds: float = 0.0
 
@@ -1566,6 +1575,157 @@ class BatchSummary:
         if not self.images_processed:
             return 0.0
         return self.fallback_cost / self.images_processed
+
+
+def _review_pdf_image_bytes(image_path: Path) -> tuple[bytes, int, int]:
+    """Prepare a locally downsampled review copy without altering any JPEG output."""
+    with Image.open(image_path) as image:
+        review_image = image.convert("RGB")
+        review_image.thumbnail(
+            (REVIEW_PDF_MAX_IMAGE_EDGE, REVIEW_PDF_MAX_IMAGE_EDGE),
+            Image.Resampling.LANCZOS,
+        )
+        buffer = BytesIO()
+        review_image.save(
+            buffer,
+            format="JPEG",
+            quality=95,
+            subsampling=0,
+            optimize=False,
+        )
+        return buffer.getvalue(), review_image.width, review_image.height
+
+
+def _draw_review_filename(
+    pdf: canvas.Canvas, filename: str, x: float, y: float, width: float
+) -> None:
+    """Draw a compact, deterministic filename caption below a contact-sheet item."""
+    pdf.setFillColor(colors.black)
+    pdf.setFont("Helvetica", 8)
+    max_chars = max(18, int(width / 4.5))
+    lines = [filename[index : index + max_chars] for index in range(0, len(filename), max_chars)]
+    for line_index, line in enumerate(lines[:3]):
+        pdf.drawCentredString(x + width / 2, y - (line_index * 9), line)
+
+
+def _draw_review_image_slot(
+    pdf: canvas.Canvas,
+    image_path: Path | None,
+    filename: str,
+    x: float,
+    y: float,
+    width: float,
+    height: float,
+    *,
+    failed: bool,
+) -> None:
+    """Draw one image or a failed-processing placeholder without changing order."""
+    caption_height = 30
+    image_y = y + caption_height
+    image_height = height - caption_height
+    if image_path is None or failed:
+        pdf.setStrokeColor(colors.HexColor("#b91c1c"))
+        pdf.setFillColor(colors.HexColor("#fef2f2"))
+        pdf.rect(x, image_y, width, image_height, fill=1, stroke=1)
+        pdf.setFillColor(colors.HexColor("#991b1b"))
+        pdf.setFont("Helvetica-Bold", 15)
+        pdf.drawCentredString(x + width / 2, image_y + image_height / 2, "PROCESSING FAILED")
+    else:
+        image_bytes, pixel_width, pixel_height = _review_pdf_image_bytes(image_path)
+        scale = min(width / pixel_width, image_height / pixel_height)
+        draw_width = pixel_width * scale
+        draw_height = pixel_height * scale
+        draw_x = x + (width - draw_width) / 2
+        draw_y = image_y + (image_height - draw_height) / 2
+        pdf.drawImage(
+            ImageReader(BytesIO(image_bytes)),
+            draw_x,
+            draw_y,
+            width=draw_width,
+            height=draw_height,
+            preserveAspectRatio=True,
+            mask="auto",
+        )
+    _draw_review_filename(pdf, filename, x, y + 18, width)
+
+
+def _write_review_contact_sheet(
+    pdf_path: Path,
+    ordered_inputs: list[Path],
+    output_paths: dict[Path, Path],
+    *,
+    after: bool,
+) -> None:
+    """Write a four-images-per-page Before or After PDF with stable positions."""
+    page_width, page_height = landscape(letter)
+    margin = 24
+    gap = 12
+    columns = 2
+    rows = 2
+    cell_width = (page_width - (2 * margin) - gap) / columns
+    cell_height = (page_height - (2 * margin) - gap) / rows
+    pdf = canvas.Canvas(str(pdf_path), pagesize=(page_width, page_height), pageCompression=0)
+    for index, input_path in enumerate(ordered_inputs):
+        if index and index % (columns * rows) == 0:
+            pdf.showPage()
+        slot = index % (columns * rows)
+        row = slot // columns
+        column = slot % columns
+        x = margin + column * (cell_width + gap)
+        y = page_height - margin - ((row + 1) * cell_height) - (row * gap)
+        output_path = output_paths.get(input_path.resolve()) if after else input_path
+        _draw_review_image_slot(
+            pdf,
+            output_path,
+            input_path.name,
+            x,
+            y,
+            cell_width,
+            cell_height,
+            failed=after and output_path is None,
+        )
+    pdf.save()
+
+
+def generate_batch_review_pdfs(
+    input_files: list[Path], output_paths: dict[Path, Path], run_id: str
+) -> tuple[Path, Path]:
+    """Create local-only Before/After review PDFs for a completed batch."""
+    ordered_inputs = sorted((path.resolve() for path in input_files), key=lambda path: path.name.casefold())
+    review_root = OUTPUT_DIR / "Batch Reviews"
+    review_directory = review_root / run_id
+    suffix = 2
+    while review_directory.exists():
+        review_directory = review_root / f"{run_id}-{suffix}"
+        suffix += 1
+    review_directory.mkdir(parents=True, exist_ok=False)
+    before_pdf = review_directory / f"MyEstatePics_{REVIEW_PDF_VERSION}_BEFORE.pdf"
+    after_pdf = review_directory / f"MyEstatePics_{REVIEW_PDF_VERSION}_AFTER.pdf"
+    _write_review_contact_sheet(before_pdf, ordered_inputs, output_paths, after=False)
+    _write_review_contact_sheet(after_pdf, ordered_inputs, output_paths, after=True)
+    logging.info(
+        "Batch review PDFs created locally: before=%s after=%s images=%d",
+        before_pdf,
+        after_pdf,
+        len(ordered_inputs),
+    )
+    return before_pdf, after_pdf
+
+
+def finalize_batch_review_pdfs(
+    summary: BatchSummary,
+    input_files: list[Path],
+    output_paths: dict[Path, Path],
+    run_id: str,
+) -> None:
+    """Record a secondary local PDF failure without affecting image outcomes."""
+    try:
+        summary.before_pdf, summary.after_pdf = generate_batch_review_pdfs(
+            input_files, output_paths, run_id
+        )
+    except Exception as error:
+        summary.review_pdf_error = f"Review PDF generation failed: {type(error).__name__}: {error}"
+        logging.exception(summary.review_pdf_error)
 
 
 class CancellationToken:
@@ -2102,6 +2262,7 @@ def process_batch(
     log_path = create_log_file()
     summary.log_path = log_path
     run_id = log_path.stem
+    review_pdf_outputs: dict[Path, Path] = {}
 
     for index, input_file in enumerate(files, 1):
         if cancel_requested():
@@ -2164,6 +2325,7 @@ def process_batch(
             destination = REVIEW_DIR if needs_review_reason else OUTPUT_DIR
             filesystem_started = time.perf_counter()
             _atomic_write(destination / input_file.name, jpeg_bytes)
+            review_pdf_outputs[input_file.resolve()] = destination / input_file.name
             timings["filesystem_write_seconds"] = time.perf_counter() - filesystem_started
             if destination == OUTPUT_DIR:
                 summary.completed += 1
@@ -2272,6 +2434,7 @@ def process_batch(
             )
     summary.fallback_cost = summary.api_calls * estimated_cost_per_image(quality)
     summary.elapsed_seconds = time.perf_counter() - batch_started
+    finalize_batch_review_pdfs(summary, files, review_pdf_outputs, run_id)
     return summary
 
 
@@ -2347,6 +2510,7 @@ def process_demo_batch(
     log_path = create_log_file()
     summary.log_path = log_path
     run_id = f"DEMO-{log_path.stem}"
+    review_pdf_outputs: dict[Path, Path] = {}
 
     for index, input_file in enumerate(files, 1):
         if cancel_requested():
@@ -2375,12 +2539,14 @@ def process_demo_batch(
             message = "DEMO simulated pass; original copied as mock processed result."
             needs_review_reason = ""
             _atomic_write(destination / input_file.name, input_file.read_bytes())
+            review_pdf_outputs[input_file.resolve()] = destination / input_file.name
             summary.completed += 1
         elif status == "REVIEW":
             destination = REVIEW_DIR
             needs_review_reason = "DEMO simulated NeedsReview result."
             message = needs_review_reason
             _atomic_write(destination / input_file.name, input_file.read_bytes())
+            review_pdf_outputs[input_file.resolve()] = destination / input_file.name
             summary.review += 1
         else:
             destination = ERROR_DIR
@@ -2432,6 +2598,7 @@ def process_demo_batch(
 
     summary.fallback_cost = 0.0
     summary.elapsed_seconds = time.perf_counter() - batch_started
+    finalize_batch_review_pdfs(summary, files, review_pdf_outputs, run_id)
     return summary
 
 
@@ -3669,6 +3836,12 @@ def launch_gui() -> int:
                 if summary.usage_responses
                 else "API token usage was not returned"
             )
+            review_pdfs = (
+                f"Before review PDF: {summary.before_pdf}\n"
+                f"After review PDF: {summary.after_pdf}"
+                if summary.before_pdf and summary.after_pdf
+                else summary.review_pdf_error or "Review PDFs were not created."
+            )
             QMessageBox.information(
                 self,
                 "Demo Batch Summary" if self.demo_checkbox.isChecked() else "Batch summary",
@@ -3680,8 +3853,13 @@ def launch_gui() -> int:
                 f"Elapsed time: {summary.elapsed_seconds:.2f} seconds\n"
                 f"{usage}\n"
                 f"Completed: {summary.completed}\nNeedsReview: {summary.review}\n"
-                f"Errors: {summary.failed}",
+                f"Errors: {summary.failed}\n"
+                f"{review_pdfs}",
             )
+            if summary.review_pdf_error:
+                self.log.appendPlainText(summary.review_pdf_error)
+            elif summary.before_pdf and summary.after_pdf:
+                self.log.appendPlainText(f"Review PDFs created: {summary.before_pdf} | {summary.after_pdf}")
             self.review_window.refresh_files()
             self.analyze()
 

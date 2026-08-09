@@ -13,11 +13,15 @@ Errors are recorded separately. The production prompt prioritizes architectural
 and material fidelity, existing-window-only edits, natural MLS window pulls,
 and protection of mirrors and reflections.
 
+Each processed batch also creates local Before/After contact-sheet PDFs under
+`Completed/Batch Reviews/<run-id>/`. They are review documents only: they do
+not alter JPEG outputs or make any API request.
+
 ## Production status
 
 - Production source baseline before this documentation freeze:
   `b5b6b231d626551198f5e440f0faa4be99d03020`
-- Application badge: `Production v3.1.0` / `Prompt V3.1`
+- Application badge: `Production v3.1.1` / `Prompt V3.1.1`
 - Production model: `gpt-image-2`
 - Production endpoint: `/v1/images/edits`
 - API requests: one direct image-edit request per successful image; a genuine
@@ -30,7 +34,7 @@ for actual charges.
 
 ## Install the Direct application
 
-1. Open `MyEstatePics AI Editor - Direct V3.1.dmg`.
+1. Open `MyEstatePics AI Editor - Direct V3.1.1.dmg`.
 2. Drag **MyEstatePics AI Editor - Direct** to **Applications**.
 3. On first launch, Control-click the application, choose **Open**, and confirm
    **Open** if macOS warns that the developer cannot be verified.

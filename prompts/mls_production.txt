@@ -15,7 +15,8 @@ PRIORITY ORDER
 2. Establish strictly neutral white balance with no global cast.
 3. Produce naturally bright MLS exposure while retaining depth.
 4. Recover crisp, realistic exterior detail through windows.
-5. Make genuine visible open sky soft natural light blue.
+5. Improve only genuinely visible, source-supported open-sky pixels with a
+   soft natural light-blue tone.
 
 MATERIAL COLOR LOCK
 
@@ -139,11 +140,12 @@ vehicles, roofs, and all other outdoor objects.
 Do not replace the complete exterior view. Do not invent a different exterior
 or substitute any outdoor object.
 
-SKY REPLACEMENT — EXISTING WINDOWS ONLY
+SKY ADJUSTMENT — EXISTING WINDOWS ONLY
 
-When the original sky region is blown out, white, gray, or unattractive,
-replace only that same sky portion with a clean, natural light-blue MLS sky.
-Apply blue only to pixels belonging to the actual exterior sky region.
+Only when identifiable sky pixels genuinely exist in the original source, a
+blown, white, gray, or unattractive sky may be improved conservatively within
+those same source-supported pixels. Apply blue only to the actual exterior sky
+region; never reconstruct missing sky or replace an unresolved window area.
 
 Keep every real exterior object unchanged. Do not allow blue to bleed onto
 houses, trees, roofs, decks, fences, landscaping, window frames, curtains,
@@ -227,9 +229,9 @@ V3.1 RESTRAINED NATURAL WINDOW SKY
 
 Keep the existing strong window pull and realistic exterior brightness. For
 genuine sky visible only through a confirmed interior window or glass door,
-prefer the photographed sky whenever practical. If the original sky is blown,
-white, gray, or unattractive and a fallback is needed, use only a subtle,
-light, naturally photographed daytime MLS blue with restrained saturation.
+preserve the photographed sky whenever practical. A subtle, light, naturally
+photographed daytime MLS blue is permitted only when those sky pixels are
+identifiable in the original source and their existing tone can be improved.
 
 Never create a dramatic AI sky. Avoid royal blue, electric blue, deep blue,
 saturated cyan, turquoise, cobalt blue, unnatural gradients, dramatic clouds,
@@ -240,3 +242,34 @@ Keep trees, houses, roofs, landscaping, decks, fences, roads, driveways,
 vehicles, horizon detail, window frames, blinds, curtains, and every other
 non-sky exterior object unchanged. Blue must affect only confirmed open-sky
 pixels and must not bleed onto any non-sky surface.
+
+V3.1.1 WINDOW / EXTERIOR FACTUAL FIDELITY — MLS CRITICAL
+
+Recover only exterior information genuinely supported by visible source-image
+pixels. Preserve the actual exterior scene and its approximate physical
+visibility through glass, screens, blinds, curtains, sheer curtains,
+reflections, and existing atmospheric or light conditions. Exposure, contrast,
+color, and visibility of real exterior information may be improved
+conservatively, but enhancement must never become reconstruction.
+
+Never reconstruct, infer, complete, replace, imagine, or invent exterior
+content merely because an exterior scene might be expected outside a window.
+Never introduce unsupported houses, neighboring buildings, roofs, windows,
+doors, garages, trees, bushes, landscaping, lawns, roads, driveways,
+sidewalks, vehicles, fences, poles, structures, horizon features, mountains,
+water, clouds, sky features, or any other exterior object.
+
+If exterior information is clipped, overexposed, blown, hidden, obscured,
+blurred, behind sheer curtains, blinds, screens, reflections, or too weak to
+determine reliably, do not guess or reconstruct it. Leave that region
+naturally bright, softly resolved, partially blown, partially obscured, or
+unresolved as appropriate. An imperfect window is always preferable to
+fabricated exterior detail; factual preservation has higher priority than
+aesthetic perfection.
+
+Do not make exterior information unnaturally sharp through sheer curtains,
+screens, blinds, reflections, dirty glass, or translucent material. Preserve
+the physical visibility limitation of the source. A light natural blue sky or
+mild cloud visibility is permitted only where the corresponding sky pixels
+genuinely exist in the source. Never generate sky merely because a window is
+bright, and never replace unresolved window content with synthetic sky.

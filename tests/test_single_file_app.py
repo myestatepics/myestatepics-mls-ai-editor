@@ -124,20 +124,20 @@ def test_mocked_end_to_end_preserves_filename_exif_and_quality_100(tmp_path, app
     assert app_module.HISTORY_DB.exists()
 
 
-def test_external_production_prompt_preserves_baseline_and_adds_architectural_fidelity(
+def test_external_production_prompt_preserves_foundation_and_adds_fidelity_rules(
     app_module,
 ):
     external_prompt = ROOT / "prompts" / "mls_production.txt"
-    legacy_prompt = (
-        ROOT / "legacy" / "myestatepics_mls_interior_prompt_v1_6.txt"
-    ).read_text(encoding="utf-8").strip()
-
     assert app_module.PROMPT_FILE == external_prompt
     loaded_prompt = app_module.load_prompt()
-    assert loaded_prompt.startswith(legacy_prompt)
-    assert loaded_prompt[len(legacy_prompt) :].startswith(
-        "\n\nARCHITECTURAL FIDELITY"
+    assert loaded_prompt.startswith(
+        "MYESTATEPICS MLS INTERIOR — PRODUCTION BASE PROMPT v1.6\n\n"
+        "PHOTO CORRECTION ONLY"
     )
+    assert "STRICTLY NEUTRAL WHITE BALANCE" in loaded_prompt
+    assert "EXPOSURE AND DEPTH" in loaded_prompt
+    assert "OUTPUT QUALITY" in loaded_prompt
+    assert "ARCHITECTURAL FIDELITY" in loaded_prompt
     assert "Mirror reflections must remain physically accurate" in loaded_prompt
     assert "Never create windows inside mirror reflections." in loaded_prompt
     assert "Never invent architecture that does not exist." in loaded_prompt
@@ -149,7 +149,7 @@ def test_external_production_prompt_preserves_baseline_and_adds_architectural_fi
     assert "Never create blue sky unless editing an existing" in loaded_prompt
     assert "leave that region unchanged" in loaded_prompt
     assert "strong, natural MLS-quality window pull" in loaded_prompt
-    assert "blown out, white, gray, or unattractive" in loaded_prompt
+    assert "Only when identifiable sky pixels genuinely exist" in loaded_prompt
     assert "Preserve every real exterior object" in loaded_prompt
     assert "Do not allow blue to bleed" in loaded_prompt
     assert "complete exterior view." in loaded_prompt
@@ -166,10 +166,16 @@ def test_external_production_prompt_preserves_baseline_and_adds_architectural_fi
     assert "subtle natural illumination gradient" in loaded_prompt
     assert "Do not add clarity, sharpening, microcontrast" in loaded_prompt
     assert "V3.1 RESTRAINED NATURAL WINDOW SKY" in loaded_prompt
-    assert "light, naturally photographed daytime MLS blue" in loaded_prompt
+    assert "A subtle, light, naturally" in loaded_prompt
     assert "Avoid royal blue, electric blue, deep blue" in loaded_prompt
     assert "Never create a dramatic AI sky" in loaded_prompt
     assert "Keep the existing strong window pull" in loaded_prompt
+    assert "V3.1.1 WINDOW / EXTERIOR FACTUAL FIDELITY" in loaded_prompt
+    assert "Never reconstruct, infer, complete, replace, imagine, or invent exterior" in loaded_prompt
+    assert "An imperfect window is always preferable to" in loaded_prompt
+    assert "mild cloud visibility is permitted only where the corresponding sky pixels" in loaded_prompt
+    assert "HARDWOOD FLOOR CONTINUITY" in loaded_prompt
+    assert "WALL AND CEILING CONTINUITY" in loaded_prompt
 
 
 def test_direct_images_edit_is_the_only_production_request(
@@ -221,8 +227,8 @@ def test_direct_images_edit_is_the_only_production_request(
 
 
 def test_application_and_prompt_versions_are_independent(app_module):
-    assert app_module.PROGRAM_VERSION == "3.1.0"
-    assert app_module.PROMPT_VERSION == "V3.1"
+    assert app_module.PROGRAM_VERSION == "3.1.1"
+    assert app_module.PROMPT_VERSION == "V3.1.1"
 
 
 def test_final_jpeg_is_quality_100_444_without_a_file_size_limit(tmp_path, app_module):
@@ -274,6 +280,68 @@ def test_large_jpeg_is_completed_without_size_based_review(tmp_path, app_module)
     assert summary.completed == 1
     assert summary.review == 0
     assert output.exists() and output.stat().st_size > 2_000_000
+
+
+def test_batch_review_pdfs_are_local_ordered_and_preserve_failed_position(
+    tmp_path, app_module
+):
+    configure_tmp(app_module, tmp_path)
+    names = ["zeta.jpg", "alpha.jpg", "middle.jpg"]
+    inputs = []
+    outputs = {}
+    for index, name in enumerate(names):
+        source = app_module.INPUT_DIR / name
+        textured_image((240 + index, 160 + index)).save(source, format="JPEG")
+        inputs.append(source)
+        if name != "middle.jpg":
+            output = app_module.OUTPUT_DIR / name
+            textured_image((240 + index, 160 + index)).save(output, format="JPEG")
+            outputs[source.resolve()] = output
+
+    before_pdf, after_pdf = app_module.generate_batch_review_pdfs(
+        inputs, outputs, "test-review-pdfs"
+    )
+
+    assert before_pdf.name == "MyEstatePics_V3.1.1_BEFORE.pdf"
+    assert after_pdf.name == "MyEstatePics_V3.1.1_AFTER.pdf"
+    assert before_pdf.parent == after_pdf.parent
+    assert before_pdf.read_bytes().startswith(b"%PDF")
+    assert after_pdf.read_bytes().startswith(b"%PDF")
+    before_text = before_pdf.read_bytes()
+    after_text = after_pdf.read_bytes()
+    assert before_text.index(b"alpha.jpg") < before_text.index(b"middle.jpg") < before_text.index(b"zeta.jpg")
+    assert after_text.index(b"alpha.jpg") < after_text.index(b"middle.jpg") < after_text.index(b"zeta.jpg")
+    assert b"PROCESSING FAILED" in after_text
+
+
+def test_review_pdf_failure_does_not_retry_or_invalidate_completed_output(
+    tmp_path, app_module, monkeypatch
+):
+    configure_tmp(app_module, tmp_path)
+    source = app_module.INPUT_DIR / "pdf-failure.jpg"
+    image = textured_image()
+    image.save(source, format="JPEG")
+    response = SimpleNamespace(
+        data=[SimpleNamespace(b64_json=base64.b64encode(make_png(image)).decode())],
+        usage=None,
+    )
+    calls = []
+
+    class Images:
+        def edit(self, **kwargs):
+            calls.append(kwargs)
+            return response
+
+    def fail_pdf_generation(*args, **kwargs):
+        raise RuntimeError("local PDF test failure")
+
+    monkeypatch.setattr(app_module, "generate_batch_review_pdfs", fail_pdf_generation)
+    summary = app_module.process_batch(SimpleNamespace(images=Images()))
+
+    assert len(calls) == 1
+    assert summary.completed == 1
+    assert (app_module.OUTPUT_DIR / source.name).exists()
+    assert "local PDF test failure" in summary.review_pdf_error
 
 
 def test_folder_scan_auto_loads_supported_images(tmp_path, app_module):

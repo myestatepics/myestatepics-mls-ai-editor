@@ -116,6 +116,12 @@ quality reduction, or size-based review routing. EXIF orientation is normalized
 to 1; safe EXIF and ICC data are retained where supported. Writes use a
 temporary file and `os.replace`.
 
+After a batch, local-only Before/After contact-sheet PDFs are written below
+`Completed/Batch Reviews/<run-id>/`. Inputs are filename-sorted and occupy the
+same grid positions in both documents. A missing final output is shown as
+`PROCESSING FAILED`; PDF generation errors are logged without changing any
+image result or issuing another API request.
+
 ## Folder scanning and eligibility
 
 The application scans on explicit lifecycle events rather than monitoring

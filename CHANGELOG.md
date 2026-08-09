@@ -4,6 +4,15 @@ This file records the production architecture history relevant to the frozen
 Direct release. The older engineering timeline remains available in
 [`docs/CHANGELOG.md`](docs/CHANGELOG.md).
 
+## V3.1.1 production hotfix
+
+- Application version: `3.1.1`; prompt version: `V3.1.1`.
+- Strengthened source-supported factual fidelity for exterior information seen
+  through windows, including sheer-curtain, screen, blind, and reflection
+  limitations; unresolved exterior content must remain unresolved.
+- Added local-only, deterministic Before/After batch review PDFs. PDF failures
+  are reported separately and never affect processed JPEG outcomes or API use.
+
 ## V3.1 production patch
 
 - Application version: `3.1.0`; prompt version: `V3.1`.

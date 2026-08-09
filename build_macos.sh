@@ -5,7 +5,7 @@ cd "$(dirname "$0")"
 
 APP_NAME="MyEstatePics AI Editor - Direct"
 BUNDLE_ID="com.myestatepics.aieditor.direct"
-RELEASE_VERSION="3.1.0"
+RELEASE_VERSION="3.1.1"
 PYTHON="${PYTHON:-}"
 
 if [[ -z "$PYTHON" ]]; then
