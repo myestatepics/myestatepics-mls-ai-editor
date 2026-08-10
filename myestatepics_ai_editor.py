@@ -1705,6 +1705,30 @@ def _draw_review_filename(
         pdf.drawCentredString(x + width / 2, y - (line_index * 9), line)
 
 
+def _draw_after_review_audit(
+    pdf: canvas.Canvas,
+    filename: str,
+    audit: dict[str, str] | None,
+    x: float,
+    y: float,
+    width: float,
+) -> None:
+    """Render saved per-image audit facts without re-running Smart analysis."""
+    audit = audit or {}
+    quality = audit.get("quality", "—").upper() or "—"
+    classification = audit.get("window_pull_classification", "MANUAL_OVERRIDE")
+    smart = "MANUAL" if classification == "MANUAL_OVERRIDE" else classification
+    reason = audit.get("window_pull_reason", "Manual quality selection.")
+    max_chars = max(24, int(width / 4.7))
+    filename_lines = [filename[index : index + max_chars] for index in range(0, len(filename), max_chars)] or [filename]
+    reason = reason if len(reason) <= max_chars else f"{reason[:max_chars - 1]}…"
+    pdf.setFillColor(colors.black)
+    pdf.setFont("Helvetica", 7.5)
+    lines = [*filename_lines[:2], f"Quality: {quality}", f"Smart: {smart}", f"Reason: {reason}"]
+    for line_index, line in enumerate(lines):
+        pdf.drawCentredString(x + width / 2, y - (line_index * 8.5), line)
+
+
 def _draw_review_image_slot(
     pdf: canvas.Canvas,
     image_path: Path | None,
@@ -1715,9 +1739,11 @@ def _draw_review_image_slot(
     height: float,
     *,
     failed: bool,
+    after: bool,
+    audit: dict[str, str] | None,
 ) -> None:
     """Draw one image or a failed-processing placeholder without changing order."""
-    caption_height = 30
+    caption_height = 64 if after else 30
     image_y = y + caption_height
     image_height = height - caption_height
     if image_path is None or failed:
@@ -1743,13 +1769,17 @@ def _draw_review_image_slot(
             preserveAspectRatio=True,
             mask="auto",
         )
-    _draw_review_filename(pdf, filename, x, y + 18, width)
+    if after:
+        _draw_after_review_audit(pdf, filename, audit, x, y + 50, width)
+    else:
+        _draw_review_filename(pdf, filename, x, y + 18, width)
 
 
 def _write_review_contact_sheet(
     pdf_path: Path,
     ordered_inputs: list[Path],
     output_paths: dict[Path, Path],
+    audit_records: dict[Path, dict[str, str]],
     *,
     after: bool,
 ) -> None:
@@ -1780,12 +1810,36 @@ def _write_review_contact_sheet(
             cell_width,
             cell_height,
             failed=after and output_path is None,
+            after=after,
+            audit=audit_records.get(input_path.resolve()),
         )
     pdf.save()
 
 
+def load_review_pdf_audit(log_path: Path | None) -> dict[Path, dict[str, str]]:
+    """Read existing batch CSV audit rows; this function never analyzes images."""
+    if log_path is None or not log_path.is_file():
+        return {}
+    try:
+        with log_path.open(newline="", encoding="utf-8") as file:
+            rows = csv.DictReader(file)
+            return {
+                (INPUT_DIR / row["filename"]).resolve(): {
+                    "quality": row.get("quality", ""),
+                    "window_pull_classification": row.get("window_pull_classification", "MANUAL_OVERRIDE"),
+                    "window_pull_reason": row.get("window_pull_reason", "Manual quality selection."),
+                }
+                for row in rows
+                if row.get("filename")
+            }
+    except Exception as error:
+        logging.warning("Review PDF audit unavailable; captions will omit Smart details: %s", error)
+        return {}
+
+
 def generate_batch_review_pdfs(
-    input_files: list[Path], output_paths: dict[Path, Path], run_id: str
+    input_files: list[Path], output_paths: dict[Path, Path], run_id: str,
+    audit_records: dict[Path, dict[str, str]] | None = None,
 ) -> tuple[Path, Path]:
     """Create local-only Before/After review PDFs for a completed batch."""
     ordered_inputs = sorted((path.resolve() for path in input_files), key=lambda path: path.name.casefold())
@@ -1798,8 +1852,9 @@ def generate_batch_review_pdfs(
     review_directory.mkdir(parents=True, exist_ok=False)
     before_pdf = review_directory / f"MyEstatePics_{REVIEW_PDF_VERSION}_BEFORE.pdf"
     after_pdf = review_directory / f"MyEstatePics_{REVIEW_PDF_VERSION}_AFTER.pdf"
-    _write_review_contact_sheet(before_pdf, ordered_inputs, output_paths, after=False)
-    _write_review_contact_sheet(after_pdf, ordered_inputs, output_paths, after=True)
+    audit_records = audit_records or {}
+    _write_review_contact_sheet(before_pdf, ordered_inputs, output_paths, audit_records, after=False)
+    _write_review_contact_sheet(after_pdf, ordered_inputs, output_paths, audit_records, after=True)
     logging.info(
         "Batch review PDFs created locally: before=%s after=%s images=%d",
         before_pdf,
@@ -1818,7 +1873,7 @@ def finalize_batch_review_pdfs(
     """Record a secondary local PDF failure without affecting image outcomes."""
     try:
         summary.before_pdf, summary.after_pdf = generate_batch_review_pdfs(
-            input_files, output_paths, run_id
+            input_files, output_paths, run_id, load_review_pdf_audit(summary.log_path)
         )
     except Exception as error:
         summary.review_pdf_error = f"Review PDF generation failed: {type(error).__name__}: {error}"

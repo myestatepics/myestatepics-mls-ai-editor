@@ -346,6 +346,50 @@ def test_batch_review_pdfs_are_local_ordered_and_preserve_failed_position(
     assert b"PROCESSING FAILED" in after_text
 
 
+def test_after_review_pdf_uses_saved_smart_audit_without_reanalyzing_images(
+    tmp_path, app_module, monkeypatch
+):
+    configure_tmp(app_module, tmp_path)
+    low = app_module.INPUT_DIR / "B-01.jpg"
+    manual = app_module.INPUT_DIR / "B-03.jpg"
+    textured_image().save(low, format="JPEG")
+    textured_image().save(manual, format="JPEG")
+    low_output = app_module.OUTPUT_DIR / low.name
+    textured_image().save(low_output, format="JPEG")
+    audit = {
+        low.resolve(): {
+            "quality": "low",
+            "window_pull_classification": "NO_WINDOW_PULL",
+            "window_pull_reason": "No significant window pull detected",
+        },
+        manual.resolve(): {
+            "quality": "medium",
+            "window_pull_classification": "MANUAL_OVERRIDE",
+            "window_pull_reason": "Manual quality selection.",
+        },
+    }
+    monkeypatch.setattr(
+        app_module,
+        "assess_window_pull",
+        lambda path: (_ for _ in ()).throw(AssertionError("PDF must not analyze images")),
+    )
+
+    before_pdf, after_pdf = app_module.generate_batch_review_pdfs(
+        [low, manual], {low.resolve(): low_output}, "smart-audit", audit
+    )
+
+    before_bytes = before_pdf.read_bytes()
+    after_bytes = after_pdf.read_bytes()
+    assert b"Quality:" not in before_bytes
+    assert b"Quality: LOW" in after_bytes
+    assert b"Smart: NO_WINDOW_PULL" in after_bytes
+    assert b"Reason: No significant window pull detected" in after_bytes
+    assert b"Quality: MEDIUM" in after_bytes
+    assert b"Smart: MANUAL" in after_bytes
+    assert b"Reason: Manual quality selection." in after_bytes
+    assert b"PROCESSING FAILED" in after_bytes
+
+
 def test_review_pdf_failure_does_not_retry_or_invalidate_completed_output(
     tmp_path, app_module, monkeypatch
 ):
