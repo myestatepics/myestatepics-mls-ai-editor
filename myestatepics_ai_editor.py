@@ -51,6 +51,14 @@ from openai import OpenAI
 from PIL import Image, ImageFilter
 from dotenv import dotenv_values, load_dotenv
 from editing_agent import EditingAgent, RuleSelection
+from smart_costing import (
+    NO_WINDOW_PULL,
+    UNCERTAIN,
+    WINDOW_PULL_REQUIRED,
+    WindowPullAssessment,
+    assess_window_pull,
+    select_smart_quality,
+)
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import landscape, letter
 from reportlab.lib.utils import ImageReader
@@ -152,6 +160,7 @@ PROMPT_VERSION = "V3.1.1"
 MODEL = "gpt-image-2"
 QUALITY = "low"
 QUALITY_OPTIONS = ("low", "medium", "high")
+QUALITY_MODES = ("smart",) + QUALITY_OPTIONS
 QUALITY_SETTING = "ui/quality"
 SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 LANDSCAPE_SIZE = "1536x1024"
@@ -352,6 +361,21 @@ def normalize_quality_setting(value: Any, default: str = "low") -> str:
     """Keep an existing explicit choice; never infer a more expensive quality."""
     candidate = str(value).strip().lower() if value is not None else ""
     return candidate if candidate in QUALITY_OPTIONS else default
+
+
+def normalize_quality_mode(value: Any, default: str = "low") -> str:
+    """Normalize the UI mode without allowing the OpenAI API's Auto quality."""
+    candidate = str(value).strip().lower() if value is not None else ""
+    return candidate if candidate in QUALITY_MODES else default
+
+
+def quality_for_image(quality_mode: str, input_file: Path) -> tuple[str, WindowPullAssessment | None]:
+    """Resolve Smart locally; explicit Low/Medium/High always override it."""
+    mode = normalize_quality_mode(quality_mode)
+    if mode != "smart":
+        return mode, None
+    assessment = assess_window_pull(input_file)
+    return select_smart_quality(assessment), assessment
 
 
 def choose_native_size(input_file: Path) -> str:
@@ -1202,6 +1226,8 @@ def append_log(log_path: Path, row: dict[str, object]) -> None:
         "prompt_version",
         "model",
         "quality",
+        "window_pull_classification",
+        "window_pull_reason",
         "processing_time_seconds",
         "api_cost",
         "status",
@@ -2000,6 +2026,11 @@ def selected_batch_cost(
 ) -> float:
     if demo_mode:
         return 0.0
+    if quality == "smart":
+        return sum(
+            estimated_cost_per_image(quality_for_image("smart", path)[0])
+            for path in selected_files
+        )
     return len(selected_files) * estimated_cost_per_image(quality)
 
 
@@ -2256,6 +2287,7 @@ def _log_row(
     needs_review_reason: str = "",
     rule_selection: RuleSelection | None = None,
     api_request_count: int = 0,
+    window_pull_assessment: WindowPullAssessment | None = None,
 ) -> dict[str, object]:
     metrics = metrics or {}
     usage = usage or ApiUsage()
@@ -2266,6 +2298,12 @@ def _log_row(
         "prompt_version": PROMPT_VERSION,
         "model": MODEL,
         "quality": QUALITY,
+        "window_pull_classification": (
+            window_pull_assessment.classification if window_pull_assessment else "MANUAL_OVERRIDE"
+        ),
+        "window_pull_reason": (
+            window_pull_assessment.reason if window_pull_assessment else "Manual quality selection."
+        ),
         "processing_time_seconds": f"{processing_time_seconds:.3f}",
         "api_cost": f"{api_cost:.6f}",
         "status": status,
@@ -2320,10 +2358,10 @@ def process_batch(
     event=lambda kind, payload: None,
 ) -> BatchSummary:
     """Run the v1.6 engine sequentially; designed for a GUI worker thread."""
-    if quality not in QUALITY_OPTIONS:
+    if quality not in QUALITY_MODES:
         raise ValueError(f"Unsupported quality: {quality}")
     global QUALITY
-    QUALITY = quality
+    QUALITY = quality if quality in QUALITY_OPTIONS else "low"
     batch_started = time.perf_counter()
     run_internal_regression_tests()
     for directory in (INPUT_DIR, OUTPUT_DIR, REVIEW_DIR, ERROR_DIR, LOG_DIR, DATA_DIR):
@@ -2352,12 +2390,24 @@ def process_batch(
         metrics: dict[str, Any] = {}
         usage = ApiUsage()
         rule_selection: RuleSelection | None = None
+        window_assessment: WindowPullAssessment | None = None
+        image_quality = quality
         image_started = time.perf_counter()
         api_call_completed = False
         timings: dict[str, float] = {}
         try:
             preparation_started = time.perf_counter()
             metrics = analyze_input(input_file)
+            image_quality, window_assessment = quality_for_image(quality, input_file)
+            QUALITY = image_quality
+            if window_assessment:
+                logging.info(
+                    "Smart costing: filename=%s classification=%s selected_quality=%s reason=%s api_calls=0",
+                    input_file.name,
+                    window_assessment.classification,
+                    image_quality,
+                    window_assessment.reason,
+                )
             rule_selection = build_edit_instruction(base_prompt, input_file)
             prompt = (
                 f"{rule_selection.instruction}\n\n"
@@ -2366,11 +2416,12 @@ def process_batch(
             timings["image_preparation_seconds"] = time.perf_counter() - preparation_started
             api_started = time.perf_counter()
             generated_bytes, requested_size, usage = call_image_editor(
-                client, input_file, prompt, quality
+                client, input_file, prompt, image_quality
             )
             timings["api_latency_seconds"] = time.perf_counter() - api_started
             api_call_completed = True
             summary.api_calls += 1
+            summary.fallback_cost += estimated_cost_per_image(image_quality)
             decode_started = time.perf_counter()
             with Image.open(BytesIO(generated_bytes)) as generated:
                 generated_image = generated.convert("RGB")
@@ -2426,13 +2477,18 @@ def process_batch(
             logging.info(
                 "Image timing: filename=%s quality=%s api_latency=%.3f preparation=%.3f "
                 "decode=%.3f premium_finish=%.3f filesystem=%.3f total=%.3f",
-                input_file.name, quality, timings.get("api_latency_seconds", 0.0),
+                input_file.name, image_quality, timings.get("api_latency_seconds", 0.0),
                 timings.get("image_preparation_seconds", 0.0),
                 timings.get("response_decode_seconds", 0.0),
                 timings.get("premium_finish_seconds", 0.0),
                 timings.get("filesystem_write_seconds", 0.0), image_elapsed,
             )
-            image_cost = estimated_cost_per_image(quality)
+            image_cost = estimated_cost_per_image(image_quality)
+            smart_message = (
+                f"Smart costing: {window_assessment.classification}; {window_assessment.reason}"
+                if window_assessment else ""
+            )
+            message = " | ".join(part for part in (message, smart_message) if part)
             append_log(
                 log_path,
                 _log_row(
@@ -2452,6 +2508,7 @@ def process_batch(
                     needs_review_reason=needs_review_reason,
                     rule_selection=rule_selection,
                     api_request_count=1,
+                    window_pull_assessment=window_assessment,
                 ),
             )
             append_history(
@@ -2470,7 +2527,7 @@ def process_batch(
                 rule_selection.applied_rule_ids if rule_selection else (),
                 filename=input_file.name,
                 batch_id=run_id,
-                quality=quality,
+                quality=image_quality,
             )
             event(
                 "finished",
@@ -2483,6 +2540,11 @@ def process_batch(
                     "api_cost": image_cost,
                     "destination": str(destination),
                     "needs_review_reason": needs_review_reason,
+                    "window_pull_classification": (
+                        window_assessment.classification if window_assessment else "MANUAL_OVERRIDE"
+                    ),
+                    "quality": image_quality,
+                    "window_pull_reason": window_assessment.reason if window_assessment else "Manual quality selection.",
                 },
             )
         except Exception as error:
@@ -2499,9 +2561,10 @@ def process_batch(
                     usage=usage,
                     message=str(error),
                     processing_time_seconds=time.perf_counter() - image_started,
-                    api_cost=(estimated_cost_per_image(quality) if api_call_completed else 0.0),
+                    api_cost=(estimated_cost_per_image(image_quality) if api_call_completed else 0.0),
                     rule_selection=rule_selection,
                     api_request_count=int(api_call_completed),
+                    window_pull_assessment=window_assessment,
                 ),
             )
             append_history(
@@ -2523,13 +2586,17 @@ def process_batch(
                     "error": str(error),
                     "processing_time_seconds": time.perf_counter() - image_started,
                     "api_cost": (
-                        estimated_cost_per_image(quality) if api_call_completed else 0.0
+                        estimated_cost_per_image(image_quality) if api_call_completed else 0.0
                     ),
                     "destination": str(ERROR_DIR),
                     "needs_review_reason": "",
+                    "window_pull_classification": (
+                        window_assessment.classification if window_assessment else "MANUAL_OVERRIDE"
+                    ),
+                    "quality": image_quality,
+                    "window_pull_reason": window_assessment.reason if window_assessment else "Manual quality selection.",
                 },
             )
-    summary.fallback_cost = summary.api_calls * estimated_cost_per_image(quality)
     summary.elapsed_seconds = time.perf_counter() - batch_started
     finalize_batch_review_pdfs(summary, files, review_pdf_outputs, run_id)
     return summary
@@ -2587,13 +2654,13 @@ def process_demo_batch(
     delay_seconds: float = 0.15,
 ) -> BatchSummary:
     """Simulate the complete batch workflow without constructing an API client."""
-    if quality not in QUALITY_OPTIONS:
+    if quality not in QUALITY_MODES:
         raise ValueError(f"Unsupported quality: {quality}")
     if result_mode not in {"All Pass", "Some Need Review", "Include Error"}:
         raise ValueError(f"Unsupported demo result mode: {result_mode}")
 
     global QUALITY
-    QUALITY = quality
+    QUALITY = quality if quality in QUALITY_OPTIONS else "low"
     batch_started = time.perf_counter()
     for directory in (INPUT_DIR, OUTPUT_DIR, REVIEW_DIR, ERROR_DIR, LOG_DIR, DATA_DIR):
         directory.mkdir(parents=True, exist_ok=True)
@@ -2616,6 +2683,8 @@ def process_demo_batch(
             break
         event("started", {"index": index, "total": len(files), "filename": input_file.name})
         image_started = time.perf_counter()
+        image_quality, window_assessment = quality_for_image(quality, input_file)
+        QUALITY = image_quality
         if delay_seconds:
             time.sleep(delay_seconds)
 
@@ -2631,6 +2700,10 @@ def process_demo_batch(
             status = "PASS"
 
         elapsed = time.perf_counter() - image_started
+        smart_message = (
+            f"Smart costing: {window_assessment.classification}; {window_assessment.reason}"
+            if window_assessment else "Manual quality selection."
+        )
         if status == "PASS":
             destination = OUTPUT_DIR
             message = "DEMO simulated pass; original copied as mock processed result."
@@ -2660,10 +2733,11 @@ def process_demo_batch(
             filename=input_file.name,
             status=status,
             destination=destination,
-            message=f"DEMO — {message}",
+            message=f"DEMO — {message} | {smart_message}",
             processing_time_seconds=elapsed,
             api_cost=0.0,
             needs_review_reason=needs_review_reason,
+            window_pull_assessment=window_assessment,
         )
         row["model"] = "DEMO"
         row["prompt_version"] = "DEMO"
@@ -2673,10 +2747,10 @@ def process_demo_batch(
         append_demo_history(
             run_id=run_id,
             filename=input_file.name,
-            quality=quality,
+            quality=image_quality,
             status=status,
             destination=destination,
-            message=message,
+            message=f"{message} | {smart_message}",
         )
 
         payload = {
@@ -2685,6 +2759,11 @@ def process_demo_batch(
             "api_cost": 0.0,
             "destination": str(destination),
             "needs_review_reason": needs_review_reason,
+            "window_pull_classification": (
+                window_assessment.classification if window_assessment else "MANUAL_OVERRIDE"
+            ),
+            "quality": image_quality,
+            "window_pull_reason": window_assessment.reason if window_assessment else "Manual quality selection.",
         }
         if status == "FAILED":
             payload["error"] = message
@@ -3322,9 +3401,9 @@ def launch_gui() -> int:
             )
 
             self.quality = QComboBox()
-            self.quality.addItems(["LOW", "MEDIUM", "HIGH"])
-            saved_quality = normalize_quality_setting(
-                self.settings.value(QUALITY_SETTING, "low"), "low"
+            self.quality.addItems(["SMART", "LOW", "MEDIUM", "HIGH"])
+            saved_quality = normalize_quality_mode(
+                self.settings.value(QUALITY_SETTING, "smart"), "smart"
             )
             self.quality.setCurrentText(saved_quality.upper())
             self.demo_checkbox = QCheckBox("Demo Mode — No API Charges")
@@ -3815,11 +3894,14 @@ def launch_gui() -> int:
 
         def on_quality_changed(self, quality):
             global QUALITY
-            QUALITY = normalize_quality_setting(quality, "low")
+            QUALITY = normalize_quality_mode(quality, "smart")
             _atomic_update_preferences(
                 self.preferences_path, {QUALITY_SETTING: QUALITY}
             )
-            self.log.appendPlainText(f"Quality selected: {QUALITY.upper()}")
+            self.log.appendPlainText(
+                "Smart Costing selected: local window assessment chooses Low or Medium per image."
+                if QUALITY == "smart" else f"Quality selected: {QUALITY.upper()}"
+            )
             self.update_job_summary()
 
         def open_env(self):
@@ -3984,7 +4066,8 @@ def launch_gui() -> int:
                 self.progress.setValue(self.progress.value() + 1)
                 review_reason = payload["needs_review_reason"] or "—"
                 self.log.appendPlainText(
-                    f"Filename: {payload['filename']} | Quality: {QUALITY} | "
+                    f"Filename: {payload['filename']} | Window pull: {payload.get('window_pull_classification', 'MANUAL_OVERRIDE')} | "
+                    f"Quality: {payload.get('quality', QUALITY)} | Reason: {payload.get('window_pull_reason', 'Manual quality selection.')} | "
                     f"Processing time: {payload['processing_time_seconds']:.2f}s | "
                     f"Estimated API cost: ${payload['api_cost']:.4f} | "
                     f"Destination: {payload['destination']} | "
@@ -3995,7 +4078,8 @@ def launch_gui() -> int:
             elif kind == "failed":
                 self.progress.setValue(self.progress.value() + 1)
                 self.log.appendPlainText(
-                    f"Filename: {payload['filename']} | Quality: {QUALITY} | "
+                    f"Filename: {payload['filename']} | Window pull: {payload.get('window_pull_classification', 'MANUAL_OVERRIDE')} | "
+                    f"Quality: {payload.get('quality', QUALITY)} | Reason: {payload.get('window_pull_reason', 'Manual quality selection.')} | "
                     f"Processing time: {payload['processing_time_seconds']:.2f}s | "
                     f"Estimated API cost: ${payload['api_cost']:.4f} | "
                     f"Destination: {payload['destination']} | NeedsReview reason: — | "
