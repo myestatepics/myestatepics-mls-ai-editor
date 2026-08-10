@@ -32,6 +32,8 @@ Archive/
 *.db
 *.log
 *.tmp
+learned_rules.json
+feedback_history.jsonl
 dist/
 build/
 *.spec

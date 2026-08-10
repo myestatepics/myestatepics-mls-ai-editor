@@ -5,7 +5,7 @@
 This procedure builds the side-by-side Apple Silicon application:
 
 ```text
-MyEstatePics AI Editor - Direct.app
+MyEstatePics AI Editor - Direct V4.0.app
 ```
 
 Build only from a clean checkout of the approved production commit or its
@@ -106,17 +106,17 @@ an unapproved icon during a production rebuild.
 Set and verify the generated Info.plist:
 
 ```bash
-PLIST="dist/MyEstatePics AI Editor - Direct.app/Contents/Info.plist"
+PLIST="dist/MyEstatePics AI Editor - Direct V4.0.app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c \
-  "Set :CFBundleDisplayName MyEstatePics AI Editor - Direct" "$PLIST"
+  "Set :CFBundleDisplayName MyEstatePics AI Editor - Direct V4.0" "$PLIST"
 /usr/libexec/PlistBuddy -c \
-  "Set :CFBundleName MyEstatePics AI Editor - Direct" "$PLIST"
+  "Set :CFBundleName MyEstatePics AI Editor - Direct V4.0" "$PLIST"
 /usr/libexec/PlistBuddy -c \
   "Set :CFBundleIdentifier com.myestatepics.aieditor.direct" "$PLIST"
 /usr/libexec/PlistBuddy -c \
-  "Set :CFBundleShortVersionString 3.1.1" "$PLIST"
+  "Set :CFBundleShortVersionString 4.0" "$PLIST"
 /usr/libexec/PlistBuddy -c \
-  "Set :CFBundleVersion 3.1.1" "$PLIST"
+  "Set :CFBundleVersion 4.0" "$PLIST"
 plutil -lint "$PLIST"
 plutil -p "$PLIST"
 ```
@@ -125,10 +125,10 @@ Current metadata:
 
 | Field | Value |
 | --- | --- |
-| Display/name | `MyEstatePics AI Editor - Direct` |
+| Display/name | `MyEstatePics AI Editor - Direct V4.0` |
 | Bundle identifier | `com.myestatepics.aieditor.direct` |
-| Short version | `3.1.1` |
-| Bundle version | `3.1.1` |
+| Short version | `4.0` |
+| Bundle version | `4.0` |
 | Architecture | Apple Silicon |
 
 The bundle version mirrors the existing production installer metadata. This
@@ -138,10 +138,10 @@ documentation freeze does not change application versioning.
 
 ```bash
 test -f \
-  "dist/MyEstatePics AI Editor - Direct.app/Contents/Frameworks/prompts/mls_production.txt"
+  "dist/MyEstatePics AI Editor - Direct V4.0.app/Contents/Frameworks/prompts/mls_production.txt"
 cmp prompts/mls_production.txt \
-  "dist/MyEstatePics AI Editor - Direct.app/Contents/Frameworks/prompts/mls_production.txt"
-! find "dist/MyEstatePics AI Editor - Direct.app" -type f -name '.env' -print -quit \
+  "dist/MyEstatePics AI Editor - Direct V4.0.app/Contents/Frameworks/prompts/mls_production.txt"
+! find "dist/MyEstatePics AI Editor - Direct V4.0.app" -type f -name '.env' -print -quit \
   | grep -q .
 ```
 
@@ -154,11 +154,11 @@ The current internal build is ad-hoc signed:
 
 ```bash
 codesign --force --deep --sign - \
-  "dist/MyEstatePics AI Editor - Direct.app"
+  "dist/MyEstatePics AI Editor - Direct V4.0.app"
 codesign --verify --deep --strict --verbose=2 \
-  "dist/MyEstatePics AI Editor - Direct.app"
+  "dist/MyEstatePics AI Editor - Direct V4.0.app"
 codesign -dv --verbose=4 \
-  "dist/MyEstatePics AI Editor - Direct.app"
+  "dist/MyEstatePics AI Editor - Direct V4.0.app"
 ```
 
 If a valid Apple Developer ID Application certificate is available and public
@@ -167,7 +167,7 @@ distribution is approved, replace `-` with the exact signing identity:
 ```bash
 codesign --force --deep --options runtime --timestamp \
   --sign "Developer ID Application: LEGAL NAME (TEAMID)" \
-  "dist/MyEstatePics AI Editor - Direct.app"
+  "dist/MyEstatePics AI Editor - Direct V4.0.app"
 ```
 
 Developer ID signing does not itself notarize the DMG. Never describe an
@@ -178,16 +178,16 @@ ad-hoc-signed artifact as Developer ID signed or notarized.
 ```bash
 rm -rf build/dmg
 mkdir -p build/dmg
-ditto "dist/MyEstatePics AI Editor - Direct.app" \
-  "build/dmg/MyEstatePics AI Editor - Direct.app"
+ditto "dist/MyEstatePics AI Editor - Direct V4.0.app" \
+  "build/dmg/MyEstatePics AI Editor - Direct V4.0.app"
 ln -s /Applications build/dmg/Applications
-rm -f "dist/MyEstatePics AI Editor - Direct V3.1.1.dmg"
+rm -f "dist/MyEstatePics AI Editor - Direct V4.0.dmg"
 hdiutil create \
-  -volname "MyEstatePics AI Editor - Direct V3.1.1" \
+  -volname "MyEstatePics AI Editor - Direct V4.0" \
   -srcfolder build/dmg \
   -ov \
   -format UDZO \
-  "dist/MyEstatePics AI Editor - Direct V3.1.1.dmg"
+  "dist/MyEstatePics AI Editor - Direct V4.0.dmg"
 ```
 
 ## Offline packaged smoke test
@@ -206,21 +206,21 @@ Without starting production processing:
 Launch command:
 
 ```bash
-open "dist/MyEstatePics AI Editor - Direct.app"
+open "dist/MyEstatePics AI Editor - Direct V4.0.app"
 ```
 
 ## Verification and checksums
 
 ```bash
 file \
-  "dist/MyEstatePics AI Editor - Direct.app/Contents/MacOS/MyEstatePics AI Editor - Direct"
+  "dist/MyEstatePics AI Editor - Direct V4.0.app/Contents/MacOS/MyEstatePics AI Editor - Direct V4.0"
 codesign --verify --deep --strict \
-  "dist/MyEstatePics AI Editor - Direct.app"
-hdiutil verify "dist/MyEstatePics AI Editor - Direct V3.1.1.dmg"
-shasum -a 256 "dist/MyEstatePics AI Editor - Direct V3.1.1.dmg"
+  "dist/MyEstatePics AI Editor - Direct V4.0.app"
+hdiutil verify "dist/MyEstatePics AI Editor - Direct V4.0.dmg"
+shasum -a 256 "dist/MyEstatePics AI Editor - Direct V4.0.dmg"
 du -sh \
-  "dist/MyEstatePics AI Editor - Direct.app" \
-  "dist/MyEstatePics AI Editor - Direct V3.1.1.dmg"
+  "dist/MyEstatePics AI Editor - Direct V4.0.app" \
+  "dist/MyEstatePics AI Editor - Direct V4.0.dmg"
 ```
 
 Mount the DMG and verify its app has the same prompt checksum, bundle
@@ -232,8 +232,8 @@ Generated artifacts remain untracked. Stage approved deliverables as:
 
 ```text
 release/<commit-short>-direct/
-├── MyEstatePics AI Editor - Direct.app/
-└── MyEstatePics AI Editor - Direct V3.1.1.dmg
+├── MyEstatePics AI Editor - Direct V4.0.app/
+└── MyEstatePics AI Editor - Direct V4.0.dmg
 ```
 
 Record the full source commit, DMG SHA-256, app and DMG sizes, architecture,

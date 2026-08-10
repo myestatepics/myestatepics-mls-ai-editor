@@ -4,6 +4,16 @@ This file records the production architecture history relevant to the frozen
 Direct release. The older engineering timeline remains available in
 [`docs/CHANGELOG.md`](docs/CHANGELOG.md).
 
+## V4.0 local editing agent
+
+- New versioned application name: `MyEstatePics AI Editor - Direct V4.0`.
+- Adds a zero-API local Editing Memory with persisted approved rules and audit
+  history under the existing Direct Application Support directory.
+- The source-controlled V3.1.1 production prompt remains authoritative; only
+  relevant enabled approved rules are appended for a single direct image edit.
+- Keeps the V3.1.1 Direct Images Edit, size, quality, JPEG, Premium Finish,
+  cancellation, and local Before/After PDF behavior unchanged.
+
 ## V3.1.1 production hotfix
 
 - Application version: `3.1.1`; prompt version: `V3.1.1`.

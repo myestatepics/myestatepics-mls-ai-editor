@@ -3,10 +3,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-APP_NAME="MyEstatePics AI Editor - Direct"
-RELEASE_VERSION="V3.1.1"
+APP_NAME="MyEstatePics AI Editor - Direct V4.0"
 APP_PATH="dist/$APP_NAME.app"
-DMG_PATH="dist/$APP_NAME $RELEASE_VERSION.dmg"
+DMG_PATH="dist/$APP_NAME.dmg"
 STAGING_DIR="build/dmg"
 
 if [[ ! -d "$APP_PATH" ]]; then
@@ -21,7 +20,7 @@ ln -s /Applications "$STAGING_DIR/Applications"
 rm -f "$DMG_PATH"
 
 hdiutil create \
-    -volname "$APP_NAME $RELEASE_VERSION" \
+  -volname "$APP_NAME" \
     -srcfolder "$STAGING_DIR" \
     -ov \
     -format UDZO \

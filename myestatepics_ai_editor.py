@@ -1,5 +1,5 @@
 """
-MyEstatePics MLS Interior Batch Editor — Production V3.1.1
+MyEstatePics MLS Interior Batch Editor — Direct V4.0
 
 Workflow:
     Incoming/*.jpg or *.jpeg
@@ -50,6 +50,7 @@ import numpy as np
 from openai import OpenAI
 from PIL import Image, ImageFilter
 from dotenv import dotenv_values, load_dotenv
+from editing_agent import EditingAgent, RuleSelection
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import landscape, letter
 from reportlab.lib.utils import ImageReader
@@ -58,6 +59,9 @@ from reportlab.pdfgen import canvas
 
 DEFAULT_APPLICATION_NAME = "MyEstatePics AI Editor"
 DIRECT_TEST_APPLICATION_NAME = "MyEstatePics AI Editor - Direct"
+# The bundle/Finder name is versioned, but this identity deliberately remains
+# stable so V4.0 reuses the established Direct Application Support settings.
+DISPLAY_APPLICATION_NAME = "MyEstatePics AI Editor - Direct V4.0"
 APPLICATION_NAME = os.environ.get(
     "MYESTATEPICS_APPLICATION_NAME", DEFAULT_APPLICATION_NAME
 )
@@ -140,8 +144,10 @@ LOG_DIR = RUNTIME_DIR / "Logs"
 DATA_DIR = RUNTIME_DIR / "Data"
 HISTORY_DB = DATA_DIR / "image_history.sqlite3"
 PROMPT_FILE = resource_path("prompts/mls_production.txt")
+LEARNED_RULES_FILE = USER_DATA_DIR / "learned_rules.json"
+FEEDBACK_HISTORY_FILE = USER_DATA_DIR / "feedback_history.jsonl"
 
-PROGRAM_VERSION = "3.1.1"
+PROGRAM_VERSION = "4.0"
 PROMPT_VERSION = "V3.1.1"
 MODEL = "gpt-image-2"
 QUALITY = "low"
@@ -154,7 +160,7 @@ SQUARE_SIZE = "1024x1024"
 IMAGES_EDIT_API_PATH = "/v1/images/edits"
 API_OUTPUT_FORMAT = "png"
 JPEG_OUTPUT_QUALITY = 100
-REVIEW_PDF_VERSION = "V3.1.1"
+REVIEW_PDF_VERSION = "V4.0"
 REVIEW_PDF_MAX_IMAGE_EDGE = 1200
 DPI = (300, 300)
 OBSERVED_ESTIMATED_COST_PER_IMAGE = 0.28 / 6.0
@@ -319,6 +325,27 @@ def load_prompt() -> str:
     if not prompt:
         raise ValueError(f"Prompt file is empty: {PROMPT_FILE}")
     return prompt
+
+
+def editing_agent() -> EditingAgent:
+    """Return the zero-API V4.0 rule-memory layer using stable app support."""
+    return EditingAgent(USER_DATA_DIR)
+
+
+def build_edit_instruction(base_prompt: str, input_file: Path) -> RuleSelection:
+    """Append only relevant approved local lessons; master prompt remains first."""
+    selection = editing_agent().build_instruction(base_prompt, input_file)
+    logging.info(
+        "Local editing agent: filename=%s context=%s applied_rules=%s database_hash=%s "
+        "schema_version=%s conflicts=%s api_calls=0",
+        input_file.name,
+        ",".join(selection.context_categories),
+        ",".join(selection.applied_rule_ids) or "none",
+        selection.database_hash,
+        selection.database_version,
+        ",".join(selection.conflicts) or "none",
+    )
+    return selection
 
 
 def normalize_quality_setting(value: Any, default: str = "low") -> str:
@@ -958,10 +985,25 @@ def initialize_history_db() -> None:
                 usage_output_tokens INTEGER,
                 usage_total_tokens INTEGER,
                 fallback_estimated_cost REAL,
-                message TEXT
+                message TEXT,
+                learned_rule_ids TEXT,
+                learned_rules_hash TEXT,
+                learned_rules_schema_version INTEGER,
+                api_request_count INTEGER
             )
             """
         )
+        existing_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(image_history)")
+        }
+        for name, sql_type in (
+            ("learned_rule_ids", "TEXT"),
+            ("learned_rules_hash", "TEXT"),
+            ("learned_rules_schema_version", "INTEGER"),
+            ("api_request_count", "INTEGER"),
+        ):
+            if name not in existing_columns:
+                connection.execute(f"ALTER TABLE image_history ADD COLUMN {name} {sql_type}")
         connection.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_history_filename
@@ -1038,6 +1080,8 @@ def append_history(
     verification: VerificationResult | None,
     usage: ApiUsage,
     message: str,
+    rule_selection: RuleSelection | None = None,
+    api_request_count: int = 0,
 ) -> None:
     implicit_label = infer_implicit_label(filename, system_decision)
 
@@ -1071,9 +1115,13 @@ def append_history(
                 usage_output_tokens,
                 usage_total_tokens,
                 fallback_estimated_cost,
-                message
+                message,
+                learned_rule_ids,
+                learned_rules_hash,
+                learned_rules_schema_version,
+                api_request_count
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_id,
@@ -1105,6 +1153,10 @@ def append_history(
                 if system_decision in {"PASS", "REVIEW"}
                 else None,
                 message,
+                ",".join(rule_selection.applied_rule_ids) if rule_selection else "",
+                rule_selection.database_hash if rule_selection else "",
+                rule_selection.database_version if rule_selection else None,
+                api_request_count,
             ),
         )
         connection.commit()
@@ -1183,6 +1235,10 @@ def append_log(log_path: Path, row: dict[str, object]) -> None:
         "response_decode_seconds",
         "premium_finish_seconds",
         "filesystem_write_seconds",
+        "learned_rule_ids",
+        "learned_rules_hash",
+        "learned_rules_schema_version",
+        "api_request_count",
         "message",
     ]
 
@@ -1295,6 +1351,7 @@ def main() -> None:
 
     log_path = create_log_file()
     run_id = log_path.stem
+    local_agent = editing_agent()
     success = 0
     review_count = 0
     failed = 0
@@ -1311,11 +1368,13 @@ def main() -> None:
         requested_size = ""
         metrics: dict[str, Any] = {}
         usage = ApiUsage()
+        rule_selection: RuleSelection | None = None
 
         try:
             metrics = analyze_input(input_file)
+            rule_selection = build_edit_instruction(base_prompt, input_file)
             adaptive_prompt = build_adaptive_addendum(metrics)
-            full_prompt = f"{base_prompt}\n\n{adaptive_prompt}"
+            full_prompt = f"{rule_selection.instruction}\n\n{adaptive_prompt}"
 
             print(
                 "    Analysis: "
@@ -1422,6 +1481,10 @@ def main() -> None:
                     "usage_output_tokens": usage.output_tokens or "",
                     "usage_total_tokens": usage.total_tokens or "",
                     "usage_raw": usage.raw_usage,
+                    "learned_rule_ids": ",".join(rule_selection.applied_rule_ids),
+                    "learned_rules_hash": rule_selection.database_hash,
+                    "learned_rules_schema_version": rule_selection.database_version,
+                    "api_request_count": 1,
                     "fallback_estimated_cost": (
                         f"{OBSERVED_ESTIMATED_COST_PER_IMAGE:.6f}"
                     ),
@@ -1438,6 +1501,14 @@ def main() -> None:
                 verification=verification,
                 usage=usage,
                 message=" | ".join(verification.messages),
+                rule_selection=rule_selection,
+                api_request_count=1,
+            )
+            local_agent.record_applied(
+                rule_selection.applied_rule_ids,
+                filename=input_file.name,
+                batch_id=run_id,
+                quality=QUALITY,
             )
 
         except Exception as error:
@@ -2183,6 +2254,8 @@ def _log_row(
     processing_time_seconds: float = 0.0,
     api_cost: float = 0.0,
     needs_review_reason: str = "",
+    rule_selection: RuleSelection | None = None,
+    api_request_count: int = 0,
 ) -> dict[str, object]:
     metrics = metrics or {}
     usage = usage or ApiUsage()
@@ -2230,6 +2303,10 @@ def _log_row(
         "response_decode_seconds": f"{metrics.get('timings', {}).get('response_decode_seconds', 0.0):.3f}",
         "premium_finish_seconds": f"{metrics.get('timings', {}).get('premium_finish_seconds', 0.0):.3f}",
         "filesystem_write_seconds": f"{metrics.get('timings', {}).get('filesystem_write_seconds', 0.0):.3f}",
+        "learned_rule_ids": ",".join(rule_selection.applied_rule_ids) if rule_selection else "",
+        "learned_rules_hash": rule_selection.database_hash if rule_selection else "",
+        "learned_rules_schema_version": rule_selection.database_version if rule_selection else "",
+        "api_request_count": api_request_count,
         "message": message,
     }
 
@@ -2262,6 +2339,7 @@ def process_batch(
     log_path = create_log_file()
     summary.log_path = log_path
     run_id = log_path.stem
+    local_agent = editing_agent()
     review_pdf_outputs: dict[Path, Path] = {}
 
     for index, input_file in enumerate(files, 1):
@@ -2273,13 +2351,18 @@ def process_batch(
         requested_size = ""
         metrics: dict[str, Any] = {}
         usage = ApiUsage()
+        rule_selection: RuleSelection | None = None
         image_started = time.perf_counter()
         api_call_completed = False
         timings: dict[str, float] = {}
         try:
             preparation_started = time.perf_counter()
             metrics = analyze_input(input_file)
-            prompt = f"{base_prompt}\n\n{build_adaptive_addendum(metrics)}"
+            rule_selection = build_edit_instruction(base_prompt, input_file)
+            prompt = (
+                f"{rule_selection.instruction}\n\n"
+                f"{build_adaptive_addendum(metrics)}"
+            )
             timings["image_preparation_seconds"] = time.perf_counter() - preparation_started
             api_started = time.perf_counter()
             generated_bytes, requested_size, usage = call_image_editor(
@@ -2367,6 +2450,8 @@ def process_batch(
                     processing_time_seconds=image_elapsed,
                     api_cost=image_cost,
                     needs_review_reason=needs_review_reason,
+                    rule_selection=rule_selection,
+                    api_request_count=1,
                 ),
             )
             append_history(
@@ -2378,6 +2463,14 @@ def process_batch(
                 verification=verification,
                 usage=usage,
                 message=message,
+                rule_selection=rule_selection,
+                api_request_count=1,
+            )
+            local_agent.record_applied(
+                rule_selection.applied_rule_ids if rule_selection else (),
+                filename=input_file.name,
+                batch_id=run_id,
+                quality=quality,
             )
             event(
                 "finished",
@@ -2407,6 +2500,8 @@ def process_batch(
                     message=str(error),
                     processing_time_seconds=time.perf_counter() - image_started,
                     api_cost=(estimated_cost_per_image(quality) if api_call_completed else 0.0),
+                    rule_selection=rule_selection,
+                    api_request_count=int(api_call_completed),
                 ),
             )
             append_history(
@@ -2418,6 +2513,8 @@ def process_batch(
                 verification=None,
                 usage=usage,
                 message=str(error),
+                rule_selection=rule_selection,
+                api_request_count=int(api_call_completed),
             )
             event(
                 "failed",
@@ -2683,6 +2780,7 @@ def launch_gui() -> int:
             QApplication,
             QCheckBox,
             QComboBox,
+            QDialog,
             QFileDialog,
             QFrame,
             QFormLayout,
@@ -2837,7 +2935,7 @@ def launch_gui() -> int:
 
         def __init__(self, parent=None):
             super().__init__(parent)
-            self.setWindowTitle("Review — MyEstatePics AI Editor")
+            self.setWindowTitle(f"Review — {DISPLAY_APPLICATION_NAME}")
             self.resize(1180, 760)
             self.files: list[Path] = []
             self.index = 0
@@ -3022,10 +3120,90 @@ def launch_gui() -> int:
                 delete_active_output(filename)
                 self.refresh_files()
 
+    class EditingMemoryDialog(QDialog):
+        """Simple, explicit administration for persistent local editing rules."""
+
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            self.setWindowTitle("Editing Memory — MyEstatePics V4.0")
+            self.resize(920, 480)
+            layout = QVBoxLayout(self)
+            explanation = QLabel(
+                "Only APPROVED and enabled rules affect future images. "
+                "The source-controlled production prompt always wins."
+            )
+            explanation.setWordWrap(True)
+            layout.addWidget(explanation)
+            self.table = QTableWidget(0, 6)
+            self.table.setHorizontalHeaderLabels(
+                ["Rule ID", "Categories", "Description", "Status", "Enabled", "Applied"]
+            )
+            self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+            self.table.setSelectionBehavior(QTableWidget.SelectRows)
+            self.table.horizontalHeader().setStretchLastSection(True)
+            layout.addWidget(self.table)
+            actions = QHBoxLayout()
+            for text, handler in (
+                ("Approve", self.approve_selected),
+                ("Disable", self.disable_selected),
+                ("Re-enable", self.enable_selected),
+                ("Delete Proposed", self.delete_selected),
+                ("Refresh", self.refresh),
+            ):
+                button = QPushButton(text)
+                button.clicked.connect(handler)
+                actions.addWidget(button)
+            actions.addStretch(1)
+            layout.addLayout(actions)
+            self.refresh()
+
+        def selected_rule_id(self):
+            row = self.table.currentRow()
+            item = self.table.item(row, 0) if row >= 0 else None
+            return item.text() if item else None
+
+        def refresh(self):
+            rules = editing_agent().list_rules()
+            self.table.setRowCount(len(rules))
+            for row, rule in enumerate(rules):
+                values = (
+                    rule.id,
+                    ", ".join(rule.categories),
+                    rule.description,
+                    rule.status,
+                    "Yes" if rule.enabled else "No",
+                    str(rule.times_applied),
+                )
+                for column, value in enumerate(values):
+                    self.table.setItem(row, column, QTableWidgetItem(value))
+
+        def _apply(self, action):
+            rule_id = self.selected_rule_id()
+            if not rule_id:
+                QMessageBox.information(self, "Editing Memory", "Select a rule first.")
+                return
+            try:
+                action(rule_id)
+            except Exception as error:
+                QMessageBox.warning(self, "Editing Memory", str(error))
+            self.refresh()
+
+        def approve_selected(self):
+            self._apply(editing_agent().approve)
+
+        def disable_selected(self):
+            self._apply(editing_agent().disable)
+
+        def enable_selected(self):
+            self._apply(editing_agent().enable)
+
+        def delete_selected(self):
+            self._apply(editing_agent().delete_proposed)
+
     class MainWindow(QMainWindow):
         def __init__(self):
             super().__init__()
-            self.setWindowTitle("MyEstatePics AI Editor")
+            self.setWindowTitle(DISPLAY_APPLICATION_NAME)
             self.resize(1180, 1080)
             self.setMinimumSize(980, 760)
             self.thread = None
@@ -3045,6 +3223,7 @@ def launch_gui() -> int:
             )
             self.review_window = ReviewWindow(self)
             self.review_window.reprocess.connect(self.queue_retry)
+            self.memory_window = EditingMemoryDialog(self)
             root = QWidget()
             root.setObjectName("appRoot")
             root_layout = QVBoxLayout(root)
@@ -3064,7 +3243,7 @@ def launch_gui() -> int:
             header_layout = QHBoxLayout(header)
             header_layout.setContentsMargins(0, 0, 0, 0)
             header_text = QVBoxLayout()
-            title = QLabel("MyEstatePics AI Editor")
+            title = QLabel(DISPLAY_APPLICATION_NAME)
             title.setObjectName("appTitle")
             subtitle = QLabel("Commercial MLS batch photo editing")
             subtitle.setObjectName("appSubtitle")
@@ -3201,10 +3380,13 @@ def launch_gui() -> int:
             self.open_env_button.clicked.connect(self.open_env)
             self.reload_key_button = QPushButton("Reload API Key")
             self.reload_key_button.clicked.connect(self.reload_api_key)
+            self.editing_memory_button = QPushButton("Editing Memory")
+            self.editing_memory_button.clicked.connect(self.open_editing_memory)
             advanced_grid.addWidget(QLabel("Model"), 3, 0)
             advanced_grid.addWidget(self.model_label, 3, 1)
             advanced_grid.addWidget(self.open_env_button, 3, 2)
             advanced_grid.addWidget(self.reload_key_button, 3, 3)
+            advanced_grid.addWidget(self.editing_memory_button, 4, 2, 1, 2)
             advanced_layout.addWidget(self.advanced_content)
             advanced_expanded = load_boolean_setting(
                 self.settings, ADVANCED_FOLDERS_SETTING, False
@@ -3889,8 +4071,14 @@ def launch_gui() -> int:
             self.review_window.show()
             self.review_window.raise_()
 
+        def open_editing_memory(self):
+            self.memory_window.refresh()
+            self.memory_window.show()
+            self.memory_window.raise_()
+            self.memory_window.activateWindow()
+
     app = QApplication.instance() or QApplication([])
-    app.setApplicationName("MyEstatePics AI Editor")
+    app.setApplicationName(DISPLAY_APPLICATION_NAME)
     app.setStyle("Fusion")
     app.setStyleSheet(app_stylesheet)
     window = MainWindow()

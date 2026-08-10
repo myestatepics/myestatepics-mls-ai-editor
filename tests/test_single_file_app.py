@@ -227,8 +227,40 @@ def test_direct_images_edit_is_the_only_production_request(
 
 
 def test_application_and_prompt_versions_are_independent(app_module):
-    assert app_module.PROGRAM_VERSION == "3.1.1"
+    assert app_module.PROGRAM_VERSION == "4.0"
     assert app_module.PROMPT_VERSION == "V3.1.1"
+    assert app_module.DISPLAY_APPLICATION_NAME == "MyEstatePics AI Editor - Direct V4.0"
+    assert app_module.REVIEW_PDF_VERSION == "V4.0"
+
+
+def test_v4_batch_uses_local_rules_without_an_additional_api_request(tmp_path, app_module):
+    configure_tmp(app_module, tmp_path)
+    app_module.USER_DATA_DIR = tmp_path / "Application Support" / "MyEstatePics AI Editor - Direct"
+    source = app_module.INPUT_DIR / "Kitchen Window.jpg"
+    image = textured_image()
+    image.save(source, format="JPEG", quality=95)
+    calls = []
+
+    class Images:
+        def edit(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                data=[SimpleNamespace(b64_json=base64.b64encode(make_png(image)).decode())],
+                usage=None,
+            )
+
+    summary = app_module.process_batch(SimpleNamespace(images=Images()))
+    assert summary.api_calls == 1
+    assert len(calls) == 1
+    assert calls[0]["model"] == "gpt-image-2"
+    assert "APPROVED LOCAL EDITING LESSONS" in calls[0]["prompt"]
+    assert "WINDOW_IDENTITY_001" in calls[0]["prompt"]
+    with summary.log_path.open(newline="", encoding="utf-8") as handle:
+        row = next(csv.DictReader(handle))
+    assert row["api_request_count"] == "1"
+    assert "WINDOW_IDENTITY_001" in row["learned_rule_ids"]
+    assert row["learned_rules_hash"]
+    assert (app_module.USER_DATA_DIR / "learned_rules.json").exists()
 
 
 def test_final_jpeg_is_quality_100_444_without_a_file_size_limit(tmp_path, app_module):
@@ -302,8 +334,8 @@ def test_batch_review_pdfs_are_local_ordered_and_preserve_failed_position(
         inputs, outputs, "test-review-pdfs"
     )
 
-    assert before_pdf.name == "MyEstatePics_V3.1.1_BEFORE.pdf"
-    assert after_pdf.name == "MyEstatePics_V3.1.1_AFTER.pdf"
+    assert before_pdf.name == "MyEstatePics_V4.0_BEFORE.pdf"
+    assert after_pdf.name == "MyEstatePics_V4.0_AFTER.pdf"
     assert before_pdf.parent == after_pdf.parent
     assert before_pdf.read_bytes().startswith(b"%PDF")
     assert after_pdf.read_bytes().startswith(b"%PDF")
