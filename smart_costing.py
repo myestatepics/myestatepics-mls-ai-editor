@@ -48,7 +48,7 @@ def _components(mask: np.ndarray) -> list[tuple[int, int, int, int, int]]:
 
 
 def assess_window_pull(image_path: Path) -> WindowPullAssessment:
-    """Assess only strong, image-local signals; ambiguity intentionally costs Medium."""
+    """Choose Low only for a clear no-window case; ambiguity intentionally costs Medium."""
     filename = image_path.stem.casefold()
     if any(token in filename for token in ("exterior", "outside", "front", "rear", "backyard", "landscape")):
         return WindowPullAssessment(NO_WINDOW_PULL, "Exterior image; interior window recovery is not applicable.")
@@ -61,24 +61,58 @@ def assess_window_pull(image_path: Path) -> WindowPullAssessment:
         return WindowPullAssessment(UNCERTAIN, "Image could not be assessed locally; Medium selected for safety.")
 
     luminance = 0.2126 * pixels[..., 0] + 0.7152 * pixels[..., 1] + 0.0722 * pixels[..., 2]
+    # A window may expose correctly while still requiring a stronger MLS pull.
+    # Brightness therefore provides positive evidence, never the sole condition
+    # for Medium.  We reserve Low for a uniformly dark, low-detail image where
+    # there is no meaningful local signal of a window or exterior-view opening.
     bright = luminance >= 0.86
     bright_fraction = float(bright.mean())
-    if bright_fraction < 0.008:
-        return WindowPullAssessment(NO_WINDOW_PULL, "No significant bright window candidate detected.")
+    detail = np.abs(np.diff(luminance, axis=0)).mean() + np.abs(
+        np.diff(luminance, axis=1)
+    ).mean()
+    luminance_span = float(np.percentile(luminance, 95) - np.percentile(luminance, 5))
 
     image_area = bright.size
-    for area, min_x, min_y, max_x, max_y in _components(bright):
-        component_fraction = area / image_area
-        box_width = max_x - min_x + 1
-        box_height = max_y - min_y + 1
-        box_area = box_width * box_height
-        fill = area / box_area
-        if component_fraction >= 0.035 and fill >= 0.30 and max(box_width, box_height) >= 0.18 * max(bright.shape):
-            return WindowPullAssessment(WINDOW_PULL_REQUIRED, "Large bright window-like region detected; exterior recovery is likely valuable.")
 
-    if bright_fraction >= 0.03:
-        return WindowPullAssessment(UNCERTAIN, "Meaningful bright regions detected but window significance is uncertain.")
-    return WindowPullAssessment(NO_WINDOW_PULL, "Only small or insignificant bright regions detected.")
+    def has_large_window_like_component(mask: np.ndarray) -> bool:
+        for area, min_x, min_y, max_x, max_y in _components(mask):
+            component_fraction = area / image_area
+            box_width = max_x - min_x + 1
+            box_height = max_y - min_y + 1
+            box_area = box_width * box_height
+            fill = area / box_area
+            if (
+                component_fraction >= 0.035
+                and fill >= 0.30
+                and max(box_width, box_height) >= 0.18 * max(mask.shape)
+            ):
+                return True
+        return False
+
+    if has_large_window_like_component(bright):
+        return WindowPullAssessment(
+            WINDOW_PULL_REQUIRED,
+            "Meaningful bright window-like opening detected; exterior recovery is likely valuable.",
+        )
+
+    # Correctly exposed windows are often not bright enough for the previous
+    # threshold. A large, clearly separated light opening is still meaningful.
+    window_candidate = luminance >= 0.55
+    if has_large_window_like_component(window_candidate) and luminance_span >= 0.20:
+        return WindowPullAssessment(
+            WINDOW_PULL_REQUIRED,
+            "Meaningful window-like opening detected even without blown highlights.",
+        )
+
+    if bright_fraction >= 0.008 or luminance_span >= 0.20 or detail >= 0.075:
+        return WindowPullAssessment(
+            UNCERTAIN,
+            "Potential window or exterior-view opening cannot be ruled out locally; Medium selected for safety.",
+        )
+    return WindowPullAssessment(
+        NO_WINDOW_PULL,
+        "No meaningful window-pull indicators detected in a uniformly low-detail image.",
+    )
 
 
 def select_smart_quality(assessment: WindowPullAssessment) -> str:

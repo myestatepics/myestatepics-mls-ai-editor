@@ -44,27 +44,45 @@ exposure, shadow recovery, and midtone recovery. Preserve black depth and
 architectural dimensionality. Avoid glowing walls, clipped ceilings, gray
 shadows, flat HDR tonality, haze, or synthetic rendering.
 
-WINDOW DETAIL
+WINDOW FIDELITY — AUTHORITATIVE
 
-Recover real exterior detail present in the source: brick, siding, roofs,
-window frames, trees, grass, landscaping, and neighboring structures.
+STRONG PROFESSIONAL MLS WINDOW PULL IS REQUIRED for a real existing window or
+glass door. Improve exterior exposure, visibility, natural contrast,
+recoverable exterior detail, and natural exterior color while preserving the
+identity and geometry of the actual exterior scene.
 
-Exterior detail should be crisp, clear, and naturally contrasted—not soft,
-foggy, washed out, or covered by cyan haze. Preserve clean edges without
-halos or artificial oversharpening.
+Never create, infer, or introduce a new window, opening, house, neighboring
+building, roof, garage, fence, vehicle, tree, road, structure, or exterior
+architectural feature whose existence is not supported by the source image.
+Never convert an ordinary wall, door, opening, bright region, mirror, shower
+glass, reflection, cabinet glass, glossy surface, screen, or appliance into a
+window. Never invent exterior architecture merely to make a window pull look
+complete.
 
-LIGHT-BLUE SKY THROUGH WINDOWS
+Preserve all source-supported exterior objects, including houses, trees,
+landscaping, decks, fences, roads, driveways, vehicles, roofs, and window
+frames. If exterior information is incomplete, clipped, hidden, blurred, or
+uncertain, enhance only what is supported by the source image; do not fabricate
+a plausible exterior scene.
 
-Where genuine open sky is visible through a window, that open-sky area must
-appear as a subtle, natural, light daytime blue.
+Through sheer curtains, blinds, screens, or similar material, preserve the
+natural physical softness and partial obscuration. Do not create unnaturally
+crisp exterior detail or reconstruct hidden buildings or objects.
 
-Apply blue only to genuine open-sky pixels. Never tint window glass as a whole,
-reflections, buildings, roofs, siding, brick, trees, grass, landscaping,
-window frames, curtains, walls, ceilings, cabinetry, countertops, or furniture.
+Where real sky is visibly present through a real window, preserve or recover it
+as a light, natural, pleasing, restrained daytime blue. Apply blue only to
+actual source-supported sky pixels; never tint glass as a whole, buildings,
+trees, roofs, decks, fences, landscaping, window frames, curtains, blinds,
+reflections, or interior surfaces. Avoid deep blue, royal blue, electric blue,
+cobalt blue, cyan-heavy blue, turquoise, oversaturated blue, dramatic HDR blue,
+or artificial AI-looking sky. If sky information is uncertain or unavailable,
+do not fabricate sky detail. Factual exterior preservation has priority over
+aesthetic perfection.
 
-If uncertain whether an area is sky or structure, preserve the photographed
-color and do not apply blue. Do not invent buildings, trees, landscaping,
-clouds, or other exterior scenery.
+Never create a fake window, fake outdoor scenery, or fake reflection. Mirrors
+must continue to reflect the original room; never generate outdoor scenery
+inside a mirror, reflection, shower glass, cabinet glass, glossy surface,
+screen, or appliance.
 
 OUTPUT QUALITY
 
@@ -97,79 +115,11 @@ This includes:
 
 Never invent architecture that does not exist.
 
-Never create windows inside mirror reflections.
-
-Never transform blank walls or bright regions into windows or openings.
-
 Mirror reflections must remain physically accurate to the original photograph.
 
 If an area is ambiguous, preserve the original rather than reconstructing it.
 
 Architectural fidelity always has higher priority than brightness, aesthetics, or window enhancement.
-
-STRUCTURAL LOCK — HIGHEST PRIORITY
-
-Preserve the original architecture exactly. Never create, insert, remove,
-enlarge, shrink, relocate, or modify windows, doors, skylights, wall openings,
-arches, or structural openings.
-
-If there is no window in the original photograph, do not create one. Walls must
-remain walls. Only edit windows that already exist in the original photograph.
-
-Treat a region as a real exterior window only when the source photograph shows
-all three: a physical window frame, an exterior wall boundary, and a visible
-outside scene.
-
-Never treat mirrors, shower glass, reflections, cabinet glass, glossy tile,
-polished stone, TV screens, door gaps, open interior doors, bright highlights,
-chrome, or appliances as windows.
-
-Never create a window. Never create blue sky unless editing an existing,
-confirmed exterior window. If uncertain whether a region is a real exterior
-window, leave that region unchanged.
-
-WINDOW PULL
-
-For an existing confirmed window, perform a strong, natural MLS-quality window pull.
-Recover the real exterior whenever possible.
-
-Preserve every real exterior object from the original photograph, including
-neighboring houses, trees, landscaping, decks, fences, roads, driveways,
-vehicles, roofs, and all other outdoor objects.
-
-Do not replace the complete exterior view. Do not invent a different exterior
-or substitute any outdoor object.
-
-SKY ADJUSTMENT — EXISTING WINDOWS ONLY
-
-Only when identifiable sky pixels genuinely exist in the original source, a
-blown, white, gray, or unattractive sky may be improved conservatively within
-those same source-supported pixels. Apply blue only to the actual exterior sky
-region; never reconstruct missing sky or replace an unresolved window area.
-
-Keep every real exterior object unchanged. Do not allow blue to bleed onto
-houses, trees, roofs, decks, fences, landscaping, window frames, curtains,
-blinds, or any other non-sky surface.
-
-MIRRORS AND REFLECTIONS
-
-Never create a fake window, fake outdoor scenery, or fake reflection. Never
-generate outdoor scenery inside a mirror, reflection, shower glass, cabinet
-glass, glossy surface, screen, or appliance.
-
-Mirrors must continue to reflect the original room. Preserve mirrors,
-reflections, glass, window frames, blinds, curtains, and all architectural
-details exactly as photographed.
-
-PRESERVE EVERYTHING ELSE
-
-Do not change room geometry, camera position, perspective, materials, wall
-colors, floor colors, cabinet colors, countertops, trim, doors, windows, or
-furniture placement.
-
-The objective is to improve the photograph, not redesign it. If uncertain
-whether an area is genuine exterior sky or another surface, preserve the
-photographed region unchanged.
 
 HARDWOOD FLOOR CONTINUITY
 
@@ -224,52 +174,3 @@ falloff, or make the surface flat or plastic.
 Do not add clarity, sharpening, microcontrast, texture enhancement, halos, or
 crosshatch artifacts to solve these local material-highlight issues. Smooth
 surfaces must remain smooth; wood grain must remain crisp and natural.
-
-V3.1 RESTRAINED NATURAL WINDOW SKY
-
-Keep the existing strong window pull and realistic exterior brightness. For
-genuine sky visible only through a confirmed interior window or glass door,
-preserve the photographed sky whenever practical. A subtle, light, naturally
-photographed daytime MLS blue is permitted only when those sky pixels are
-identifiable in the original source and their existing tone can be improved.
-
-Never create a dramatic AI sky. Avoid royal blue, electric blue, deep blue,
-saturated cyan, turquoise, cobalt blue, unnatural gradients, dramatic clouds,
-storm clouds, sunset colors, twilight colors, or excessive exterior
-saturation. Preserve genuine natural clouds when present.
-
-Keep trees, houses, roofs, landscaping, decks, fences, roads, driveways,
-vehicles, horizon detail, window frames, blinds, curtains, and every other
-non-sky exterior object unchanged. Blue must affect only confirmed open-sky
-pixels and must not bleed onto any non-sky surface.
-
-V3.1.1 WINDOW / EXTERIOR FACTUAL FIDELITY — MLS CRITICAL
-
-Recover only exterior information genuinely supported by visible source-image
-pixels. Preserve the actual exterior scene and its approximate physical
-visibility through glass, screens, blinds, curtains, sheer curtains,
-reflections, and existing atmospheric or light conditions. Exposure, contrast,
-color, and visibility of real exterior information may be improved
-conservatively, but enhancement must never become reconstruction.
-
-Never reconstruct, infer, complete, replace, imagine, or invent exterior
-content merely because an exterior scene might be expected outside a window.
-Never introduce unsupported houses, neighboring buildings, roofs, windows,
-doors, garages, trees, bushes, landscaping, lawns, roads, driveways,
-sidewalks, vehicles, fences, poles, structures, horizon features, mountains,
-water, clouds, sky features, or any other exterior object.
-
-If exterior information is clipped, overexposed, blown, hidden, obscured,
-blurred, behind sheer curtains, blinds, screens, reflections, or too weak to
-determine reliably, do not guess or reconstruct it. Leave that region
-naturally bright, softly resolved, partially blown, partially obscured, or
-unresolved as appropriate. An imperfect window is always preferable to
-fabricated exterior detail; factual preservation has higher priority than
-aesthetic perfection.
-
-Do not make exterior information unnaturally sharp through sheer curtains,
-screens, blinds, reflections, dirty glass, or translucent material. Preserve
-the physical visibility limitation of the source. A light natural blue sky or
-mild cloud visibility is permitted only where the corresponding sky pixels
-genuinely exist in the source. Never generate sky merely because a window is
-bright, and never replace unresolved window content with synthetic sky.

@@ -28,6 +28,7 @@ RULE_CATEGORIES = {
     "WALL", "CEILING", "HARDWOOD", "CARPET", "CABINET", "MIRROR",
     "REFLECTION", "TWILIGHT", "ARTIFACT",
 }
+MASTER_WINDOW_CATEGORIES = frozenset({"WINDOW", "SKY", "SHEER_CURTAIN"})
 
 
 def _now() -> str:
@@ -95,6 +96,7 @@ class RuleSelection:
     database_version: int
     context_categories: tuple[str, ...]
     conflicts: tuple[str, ...] = ()
+    suppressed_rule_ids: tuple[str, ...] = ()
 
 
 def _seed_rules() -> list[LearnedRule]:
@@ -107,12 +109,6 @@ def _seed_rules() -> list[LearnedRule]:
             "Avoid crosshatch, checkerboard, fake weave, artificial microtexture, excessive clarity, sharpening halos, and edge ringing.", "APPROVED", True, approved, approved),
         LearnedRule("INTERIOR_WALLS_001", ("INTERIOR", "WALL", "CEILING"), "Preserve natural interior illumination.",
             "Preserve original paint color, natural illumination gradients, and architectural depth; avoid gray patches, wavy patches, flattened walls, and color drift.", "APPROVED", True, approved, approved),
-        LearnedRule("WINDOW_IDENTITY_001", ("WINDOW",), "Preserve real exterior identity during window pull.",
-            "Maintain a strong professional MLS window pull while preserving actual exterior scene identity; do not introduce unsupported houses, buildings, roofs, fences, vehicles, or structures.", "APPROVED", True, approved, approved),
-        LearnedRule("SHEER_CURTAIN_001", ("SHEER_CURTAIN", "WINDOW"), "Respect curtain-obscured exterior detail.",
-            "Through sheer curtains, preserve the natural softness and visibility limitation; do not create unnaturally crisp exterior objects through obscuring fabric.", "APPROVED", True, approved, approved),
-        LearnedRule("WINDOW_SKY_001", ("WINDOW", "SKY"), "Keep window-visible sky restrained.",
-            "Where genuine source sky is visible through a confirmed window, keep it light, natural, restrained, and realistic; avoid deep, electric, cyan, turquoise, cobalt, or HDR-looking blue.", "APPROVED", True, approved, approved),
         LearnedRule("HARDWOOD_001", ("HARDWOOD",), "Protect sunlit hardwood.",
             "Preserve original hardwood color, visible grain, sunlight, and natural highlight transitions; do not wash sunlit hardwood toward white or yellow.", "APPROVED", True, approved, approved),
         LearnedRule("MIRROR_REFLECTION_001", ("MIRROR", "REFLECTION"), "Remove equipment only without inventing reflections.",
@@ -191,6 +187,8 @@ class EditingAgent:
             categories.append("INTERIOR")
         if any(token in name for token in ("window", "sliding", "glass door", "patio door")):
             categories.append("WINDOW")
+        if "sky" in name:
+            categories.append("SKY")
         if any(token in name for token in ("sheer", "curtain")):
             categories.append("SHEER_CURTAIN")
         if any(token in name for token in ("mirror", "reflection")):
@@ -203,11 +201,19 @@ class EditingAgent:
         context = self.context_for(input_file)
         selected: list[LearnedRule] = []
         conflicts: list[str] = []
+        suppressed: list[str] = []
         seen = {master_prompt.casefold()}
         for rule in self.list_rules():
             if rule.status != "APPROVED" or not rule.enabled:
                 continue
             if not set(rule.categories).intersection(context):
+                continue
+            if set(rule.categories).intersection(MASTER_WINDOW_CATEGORIES):
+                suppressed.append(rule.id)
+                self.logger.info(
+                    "Learned rule suppressed because the master window-fidelity prompt is authoritative: %s",
+                    rule.id,
+                )
                 continue
             if self._is_master_conflict(rule):
                 conflicts.append(rule.id)
@@ -220,7 +226,15 @@ class EditingAgent:
             selected.append(rule)
         addition = "\n".join(f"- [{rule.id}] {rule.instruction}" for rule in selected)
         instruction = master_prompt if not addition else f"{master_prompt}\n\nAPPROVED LOCAL EDITING LESSONS\n{addition}"
-        return RuleSelection(instruction, tuple(rule.id for rule in selected), self.database_hash(), RULE_DATABASE_VERSION, context, tuple(conflicts))
+        return RuleSelection(
+            instruction,
+            tuple(rule.id for rule in selected),
+            self.database_hash(),
+            RULE_DATABASE_VERSION,
+            context,
+            tuple(conflicts),
+            tuple(suppressed),
+        )
 
     def _save_rules(self, rules: Iterable[LearnedRule]) -> None:
         self._atomic_json_write(self.rules_path, {"schema_version": RULE_DATABASE_VERSION, "rules": [asdict(rule) for rule in rules]})

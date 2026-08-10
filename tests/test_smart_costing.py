@@ -47,6 +47,15 @@ def save_significant_window(path: Path) -> Image.Image:
     return result
 
 
+def save_exposed_meaningful_window(path: Path) -> Image.Image:
+    """A meaningful window that is exposed rather than blown out."""
+    image = np.full((200, 300, 3), 55, dtype=np.uint8)
+    image[25:175, 55:250] = 175
+    result = Image.fromarray(image)
+    result.save(path, "JPEG", quality=95)
+    return result
+
+
 def save_uncertain(path: Path) -> Image.Image:
     image = np.full((200, 300, 3), 70, dtype=np.uint8)
     image[::5, ::5] = 245
@@ -74,6 +83,22 @@ def test_local_window_assessment_selects_low_medium_and_never_high(tmp_path):
     assert select_smart_quality(required) == "medium"
     assert select_smart_quality(unsure) == "medium"
     assert "high" not in {select_smart_quality(no_window), select_smart_quality(required), select_smart_quality(unsure)}
+
+
+def test_production_smart_cost_regressions_route_windows_to_medium(tmp_path):
+    image_35 = tmp_path / "Production-35.jpg"
+    image_38 = tmp_path / "Production-38.jpg"
+    image_44 = tmp_path / "Production-44.jpg"
+    image_52 = tmp_path / "Production-52.jpg"
+    save_significant_window(image_35)
+    save_exposed_meaningful_window(image_38)
+    save_uncertain(image_44)
+    save_dark(image_52)
+
+    assert select_smart_quality(assess_window_pull(image_35)) == "medium"
+    assert select_smart_quality(assess_window_pull(image_38)) == "medium"
+    assert select_smart_quality(assess_window_pull(image_44)) == "medium"
+    assert select_smart_quality(assess_window_pull(image_52)) == "low"
 
 
 def test_smart_resolver_maps_no_window_to_low_and_uncertain_to_medium(tmp_path, app_module):

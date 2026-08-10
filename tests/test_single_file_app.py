@@ -84,13 +84,9 @@ def test_mocked_end_to_end_preserves_filename_exif_and_quality_100(tmp_path, app
             assert kwargs["model"] == "gpt-image-2"
             assert kwargs["quality"] == "low"
             assert kwargs["output_format"] == "png"
-            assert "Never create windows inside mirror reflections." in kwargs["prompt"]
-            assert (
-                "Never transform blank walls or bright regions into windows or openings."
-                in kwargs["prompt"]
-            )
-            assert "Never treat mirrors, shower glass, reflections" in kwargs["prompt"]
-            assert "Never create a window." in kwargs["prompt"]
+            assert kwargs["prompt"].count("WINDOW FIDELITY — AUTHORITATIVE") == 1
+            assert "Never convert an ordinary wall, door, opening, bright region" in kwargs["prompt"]
+            assert "never generate outdoor scenery" in kwargs["prompt"]
             return response
 
     summary = app_module.process_batch(SimpleNamespace(images=Images()))
@@ -139,22 +135,23 @@ def test_external_production_prompt_preserves_foundation_and_adds_fidelity_rules
     assert "OUTPUT QUALITY" in loaded_prompt
     assert "ARCHITECTURAL FIDELITY" in loaded_prompt
     assert "Mirror reflections must remain physically accurate" in loaded_prompt
-    assert "Never create windows inside mirror reflections." in loaded_prompt
+    assert loaded_prompt.count("WINDOW FIDELITY — AUTHORITATIVE") == 1
     assert "Never invent architecture that does not exist." in loaded_prompt
     assert (
-        "Never transform blank walls or bright regions into windows or openings."
+        "Never convert an ordinary wall, door, opening, bright region"
         in loaded_prompt
     )
-    assert "Never treat mirrors, shower glass, reflections" in loaded_prompt
-    assert "Never create blue sky unless editing an existing" in loaded_prompt
-    assert "leave that region unchanged" in loaded_prompt
-    assert "strong, natural MLS-quality window pull" in loaded_prompt
-    assert "Only when identifiable sky pixels genuinely exist" in loaded_prompt
-    assert "Preserve every real exterior object" in loaded_prompt
-    assert "Do not allow blue to bleed" in loaded_prompt
-    assert "complete exterior view." in loaded_prompt
+    assert "STRONG PROFESSIONAL MLS WINDOW PULL IS REQUIRED" in loaded_prompt
+    assert "Through sheer curtains, blinds, screens" in loaded_prompt
+    assert "light, natural, pleasing, restrained daytime blue" in loaded_prompt
+    assert "Avoid deep blue, royal blue, electric blue" in loaded_prompt
+    assert "cyan-heavy blue, turquoise, oversaturated blue" in loaded_prompt
+    assert "WINDOW DETAIL" not in loaded_prompt
+    assert "LIGHT-BLUE SKY THROUGH WINDOWS" not in loaded_prompt
+    assert "V3.1 RESTRAINED NATURAL WINDOW SKY" not in loaded_prompt
+    assert "V3.1.1 WINDOW / EXTERIOR FACTUAL FIDELITY" not in loaded_prompt
     assert "Never create a fake window" in loaded_prompt
-    assert "outdoor scenery inside a mirror" in loaded_prompt
+    assert "inside a mirror, reflection, shower glass" in loaded_prompt
     assert "HARDWOOD FLOOR CONTINUITY" in loaded_prompt
     assert "WALL AND CEILING CONTINUITY" in loaded_prompt
     assert "MIRROR AND PHOTOGRAPHY-EQUIPMENT REFLECTIONS" in loaded_prompt
@@ -165,15 +162,6 @@ def test_external_production_prompt_preserves_foundation_and_adds_fidelity_rules
     assert "original paint color" in loaded_prompt
     assert "subtle natural illumination gradient" in loaded_prompt
     assert "Do not add clarity, sharpening, microcontrast" in loaded_prompt
-    assert "V3.1 RESTRAINED NATURAL WINDOW SKY" in loaded_prompt
-    assert "A subtle, light, naturally" in loaded_prompt
-    assert "Avoid royal blue, electric blue, deep blue" in loaded_prompt
-    assert "Never create a dramatic AI sky" in loaded_prompt
-    assert "Keep the existing strong window pull" in loaded_prompt
-    assert "V3.1.1 WINDOW / EXTERIOR FACTUAL FIDELITY" in loaded_prompt
-    assert "Never reconstruct, infer, complete, replace, imagine, or invent exterior" in loaded_prompt
-    assert "An imperfect window is always preferable to" in loaded_prompt
-    assert "mild cloud visibility is permitted only where the corresponding sky pixels" in loaded_prompt
     assert "HARDWOOD FLOOR CONTINUITY" in loaded_prompt
     assert "WALL AND CEILING CONTINUITY" in loaded_prompt
 
@@ -227,10 +215,10 @@ def test_direct_images_edit_is_the_only_production_request(
 
 
 def test_application_and_prompt_versions_are_independent(app_module):
-    assert app_module.PROGRAM_VERSION == "4.0"
+    assert app_module.PROGRAM_VERSION == "4.0.1"
     assert app_module.PROMPT_VERSION == "V3.1.1"
-    assert app_module.DISPLAY_APPLICATION_NAME == "MyEstatePics AI Editor - Direct V4.0"
-    assert app_module.REVIEW_PDF_VERSION == "V4.0"
+    assert app_module.DISPLAY_APPLICATION_NAME == "MyEstatePics AI Editor - Direct V4.0.1"
+    assert app_module.REVIEW_PDF_VERSION == "V4.0.1"
 
 
 def test_v4_batch_uses_local_rules_without_an_additional_api_request(tmp_path, app_module):
@@ -254,11 +242,11 @@ def test_v4_batch_uses_local_rules_without_an_additional_api_request(tmp_path, a
     assert len(calls) == 1
     assert calls[0]["model"] == "gpt-image-2"
     assert "APPROVED LOCAL EDITING LESSONS" in calls[0]["prompt"]
-    assert "WINDOW_IDENTITY_001" in calls[0]["prompt"]
+    assert "WINDOW_IDENTITY_001" not in calls[0]["prompt"]
     with summary.log_path.open(newline="", encoding="utf-8") as handle:
         row = next(csv.DictReader(handle))
     assert row["api_request_count"] == "1"
-    assert "WINDOW_IDENTITY_001" in row["learned_rule_ids"]
+    assert "WINDOW_IDENTITY_001" not in row["learned_rule_ids"]
     assert row["learned_rules_hash"]
     assert (app_module.USER_DATA_DIR / "learned_rules.json").exists()
 
@@ -334,8 +322,8 @@ def test_batch_review_pdfs_are_local_ordered_and_preserve_failed_position(
         inputs, outputs, "test-review-pdfs"
     )
 
-    assert before_pdf.name == "MyEstatePics_V4.0_BEFORE.pdf"
-    assert after_pdf.name == "MyEstatePics_V4.0_AFTER.pdf"
+    assert before_pdf.name == "MyEstatePics_V4.0.1_BEFORE.pdf"
+    assert after_pdf.name == "MyEstatePics_V4.0.1_AFTER.pdf"
     assert before_pdf.parent == after_pdf.parent
     assert before_pdf.read_bytes().startswith(b"%PDF")
     assert after_pdf.read_bytes().startswith(b"%PDF")

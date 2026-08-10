@@ -15,7 +15,8 @@ def test_missing_database_seeds_approved_rules_and_never_uses_api(tmp_path):
 
     assert agent.rules_path.exists()
     assert "GLOBAL_MATERIALS_001" in selection.applied_rule_ids
-    assert "WINDOW_IDENTITY_001" in selection.applied_rule_ids
+    assert "WINDOW_IDENTITY_001" not in selection.applied_rule_ids
+    assert selection.suppressed_rule_ids == ()
     assert "APPROVED LOCAL EDITING LESSONS" in selection.instruction
     assert not hasattr(agent, "client")
     assert not hasattr(agent, "images")
@@ -35,9 +36,31 @@ def test_only_approved_enabled_and_relevant_rules_are_appended(tmp_path):
     window = agent.build_instruction(MASTER, Path("Kitchen Window.jpg"))
 
     assert generic.applied_rule_ids == ("GLOBAL_OK_001",)
-    assert window.applied_rule_ids == ("GLOBAL_OK_001", "WINDOW_OK_001")
+    assert window.applied_rule_ids == ("GLOBAL_OK_001",)
+    assert window.suppressed_rule_ids == ("WINDOW_OK_001",)
     assert "PROPOSED_001" not in window.instruction
     assert "DISABLED_001" not in window.instruction
+
+
+def test_window_sky_and_sheer_rules_are_suppressed_in_favor_of_master_prompt(tmp_path, caplog):
+    agent = EditingAgent(tmp_path)
+    rules = [
+        LearnedRule("WINDOW_OK_001", ("WINDOW",), "Window", "Duplicate window rule.", "APPROVED"),
+        LearnedRule("SKY_OK_001", ("SKY",), "Sky", "Duplicate sky rule.", "APPROVED"),
+        LearnedRule("SHEER_OK_001", ("SHEER_CURTAIN",), "Sheer", "Duplicate sheer rule.", "APPROVED"),
+        LearnedRule("HARDWOOD_OK_001", ("HARDWOOD",), "Floor", "Protect wood grain.", "APPROVED"),
+    ]
+    agent._save_rules(rules)
+
+    with caplog.at_level("INFO"):
+        selection = agent.build_instruction(MASTER, Path("Kitchen Window Sky Sheer Curtain Hardwood.jpg"))
+
+    assert selection.applied_rule_ids == ("HARDWOOD_OK_001",)
+    assert selection.suppressed_rule_ids == ("SHEER_OK_001", "SKY_OK_001", "WINDOW_OK_001")
+    assert "WINDOW_OK_001" not in selection.instruction
+    assert "SKY_OK_001" not in selection.instruction
+    assert "SHEER_OK_001" not in selection.instruction
+    assert "master window-fidelity prompt is authoritative" in caplog.text
 
 
 def test_corrupt_or_invalid_memory_falls_back_to_master_prompt(tmp_path):

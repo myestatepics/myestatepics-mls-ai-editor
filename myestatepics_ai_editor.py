@@ -1,5 +1,5 @@
 """
-MyEstatePics MLS Interior Batch Editor — Direct V4.0
+MyEstatePics MLS Interior Batch Editor — Direct V4.0.1
 
 Workflow:
     Incoming/*.jpg or *.jpeg
@@ -68,8 +68,8 @@ from reportlab.pdfgen import canvas
 DEFAULT_APPLICATION_NAME = "MyEstatePics AI Editor"
 DIRECT_TEST_APPLICATION_NAME = "MyEstatePics AI Editor - Direct"
 # The bundle/Finder name is versioned, but this identity deliberately remains
-# stable so V4.0 reuses the established Direct Application Support settings.
-DISPLAY_APPLICATION_NAME = "MyEstatePics AI Editor - Direct V4.0"
+# stable so V4.0.1 reuses the established Direct Application Support settings.
+DISPLAY_APPLICATION_NAME = "MyEstatePics AI Editor - Direct V4.0.1"
 APPLICATION_NAME = os.environ.get(
     "MYESTATEPICS_APPLICATION_NAME", DEFAULT_APPLICATION_NAME
 )
@@ -155,7 +155,7 @@ PROMPT_FILE = resource_path("prompts/mls_production.txt")
 LEARNED_RULES_FILE = USER_DATA_DIR / "learned_rules.json"
 FEEDBACK_HISTORY_FILE = USER_DATA_DIR / "feedback_history.jsonl"
 
-PROGRAM_VERSION = "4.0"
+PROGRAM_VERSION = "4.0.1"
 PROMPT_VERSION = "V3.1.1"
 MODEL = "gpt-image-2"
 QUALITY = "low"
@@ -169,7 +169,7 @@ SQUARE_SIZE = "1024x1024"
 IMAGES_EDIT_API_PATH = "/v1/images/edits"
 API_OUTPUT_FORMAT = "png"
 JPEG_OUTPUT_QUALITY = 100
-REVIEW_PDF_VERSION = "V4.0"
+REVIEW_PDF_VERSION = "V4.0.1"
 REVIEW_PDF_MAX_IMAGE_EDGE = 1200
 DPI = (300, 300)
 OBSERVED_ESTIMATED_COST_PER_IMAGE = 0.28 / 6.0
@@ -337,7 +337,7 @@ def load_prompt() -> str:
 
 
 def editing_agent() -> EditingAgent:
-    """Return the zero-API V4.0 rule-memory layer using stable app support."""
+    """Return the zero-API V4.0.1 rule-memory layer using stable app support."""
     return EditingAgent(USER_DATA_DIR)
 
 
@@ -345,11 +345,12 @@ def build_edit_instruction(base_prompt: str, input_file: Path) -> RuleSelection:
     """Append only relevant approved local lessons; master prompt remains first."""
     selection = editing_agent().build_instruction(base_prompt, input_file)
     logging.info(
-        "Local editing agent: filename=%s context=%s applied_rules=%s database_hash=%s "
-        "schema_version=%s conflicts=%s api_calls=0",
+        "Local editing agent: filename=%s context=%s applied_rules=%s suppressed_rules=%s "
+        "database_hash=%s schema_version=%s conflicts=%s api_calls=0",
         input_file.name,
         ",".join(selection.context_categories),
         ",".join(selection.applied_rule_ids) or "none",
+        ",".join(selection.suppressed_rule_ids) or "none",
         selection.database_hash,
         selection.database_version,
         ",".join(selection.conflicts) or "none",
@@ -621,12 +622,6 @@ def build_adaptive_addendum(metrics: dict[str, Any]) -> str:
             "- White balance must remain neutral. No reliable image-specific cast "
             "measurement was available, so avoid aggressive warm or cool correction."
         )
-
-    lines.append(
-        "- Genuine open sky visible through windows must appear soft natural light blue. "
-        "Never tint glass, brick, roofs, buildings, trees, grass, frames, reflections, "
-        "or interior surfaces blue."
-    )
 
     return "\n".join(lines)
 
@@ -3259,7 +3254,7 @@ def launch_gui() -> int:
 
         def __init__(self, parent=None):
             super().__init__(parent)
-            self.setWindowTitle("Editing Memory — MyEstatePics V4.0")
+            self.setWindowTitle("Editing Memory — MyEstatePics V4.0.1")
             self.resize(920, 480)
             layout = QVBoxLayout(self)
             explanation = QLabel(

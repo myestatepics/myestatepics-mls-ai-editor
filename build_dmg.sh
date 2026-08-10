@@ -3,7 +3,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-APP_NAME="MyEstatePics AI Editor - Direct V4.0"
+APP_NAME="MyEstatePics AI Editor - Direct V4.0.1"
 APP_PATH="dist/$APP_NAME.app"
 DMG_PATH="dist/$APP_NAME.dmg"
 STAGING_DIR="build/dmg"

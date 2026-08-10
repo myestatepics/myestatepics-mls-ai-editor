@@ -4,6 +4,18 @@ This file records the production architecture history relevant to the frozen
 Direct release. The older engineering timeline remains available in
 [`docs/CHANGELOG.md`](docs/CHANGELOG.md).
 
+## V4.0.1 production hotfix
+
+- New versioned application and installer name: `MyEstatePics AI Editor - Direct V4.0.1`.
+- Smart Cost now selects Medium for meaningful or uncertain window/exterior-view
+  openings; Low is reserved for a clear no-window-pull assessment. Smart remains
+  local-only and never selects Auto or High.
+- Consolidated all window, sky, and sheer-curtain guidance into one authoritative
+  source-controlled Window Fidelity block. Learned rules in those categories are
+  suppressed and logged; non-conflicting approved learned rules remain active.
+- The one-call Direct Images Edit architecture, quality mappings, Premium Finish,
+  JPEG export, folder workflow, and Before/After PDFs are unchanged.
+
 ## V4.0 local editing agent
 
 - New versioned application name: `MyEstatePics AI Editor - Direct V4.0`.
