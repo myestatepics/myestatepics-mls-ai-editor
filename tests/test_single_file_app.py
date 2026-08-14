@@ -3,8 +3,10 @@ from __future__ import annotations
 import base64
 import configparser
 import csv
+import hashlib
 import importlib.util
 import inspect
+import logging
 import sqlite3
 import sys
 from io import BytesIO
@@ -374,7 +376,7 @@ def test_after_review_pdf_uses_saved_smart_audit_without_reanalyzing_images(
     assert b"Reason: No significant window pull detected" in after_bytes
     assert b"Quality: MEDIUM" in after_bytes
     assert b"Smart: MANUAL" in after_bytes
-    assert b"Reason: Manual quality selection." in after_bytes
+    assert b"Output file unavailable when review PDF was generated." in after_bytes
     assert b"PROCESSING FAILED" in after_bytes
 
 
@@ -399,13 +401,159 @@ def test_review_pdf_failure_does_not_retry_or_invalidate_completed_output(
     def fail_pdf_generation(*args, **kwargs):
         raise RuntimeError("local PDF test failure")
 
-    monkeypatch.setattr(app_module, "generate_batch_review_pdfs", fail_pdf_generation)
+    monkeypatch.setattr(app_module, "_write_review_contact_sheet", fail_pdf_generation)
     summary = app_module.process_batch(SimpleNamespace(images=Images()))
 
     assert len(calls) == 1
     assert summary.completed == 1
     assert (app_module.OUTPUT_DIR / source.name).exists()
     assert "local PDF test failure" in summary.review_pdf_error
+
+
+def _create_batch_inputs(app_module, count: int = 36):
+    inputs = []
+    for number in range(1, count + 1):
+        source = app_module.INPUT_DIR / f"Batch-{number:02d}.jpg"
+        textured_image().save(source, format="JPEG")
+        inputs.append(source)
+    return inputs
+
+
+def test_full_thirty_six_image_batch_creates_both_review_pdfs(tmp_path, app_module):
+    configure_tmp(app_module, tmp_path)
+    _create_batch_inputs(app_module)
+    image = textured_image()
+    calls = []
+
+    class Images:
+        def edit(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                data=[SimpleNamespace(b64_json=base64.b64encode(make_png(image)).decode())],
+                usage=None,
+            )
+
+    summary = app_module.process_batch(SimpleNamespace(images=Images()), quality="low")
+
+    assert summary.selected == 36
+    assert summary.successful == 36
+    assert summary.failed_or_skipped == 0
+    assert len(calls) == 36
+    assert summary.before_pdf and summary.before_pdf.exists()
+    assert summary.after_pdf and summary.after_pdf.exists()
+
+
+def test_partial_thirty_six_image_batch_creates_matched_failure_slots_without_extra_calls(
+    tmp_path, app_module, monkeypatch
+):
+    configure_tmp(app_module, tmp_path)
+    monkeypatch.setattr(app_module.time, "sleep", lambda _: None)
+    inputs = _create_batch_inputs(app_module)
+    image = textured_image()
+    calls = []
+    failed_names = {"Batch-34.jpg", "Batch-35.jpg", "Batch-36.jpg"}
+
+    class APIConnectionError(Exception):
+        pass
+
+    class Images:
+        def edit(self, **kwargs):
+            calls.append(kwargs)
+            if Path(kwargs["image"].name).name in failed_names:
+                raise APIConnectionError("forced local transient failure")
+            return SimpleNamespace(
+                data=[SimpleNamespace(b64_json=base64.b64encode(make_png(image)).decode())],
+                usage=None,
+            )
+
+    summary = app_module.process_batch(SimpleNamespace(images=Images()), quality="low")
+
+    assert summary.selected == 36
+    assert summary.successful == 33
+    assert summary.failed == 3
+    assert summary.failed_or_skipped == 3
+    assert summary.before_pdf and summary.before_pdf.exists()
+    assert summary.after_pdf and summary.after_pdf.exists()
+    # Three genuine transient failures consume only their normal three local
+    # retry attempts; PDF generation never makes an extra Images Edit request.
+    assert len(calls) == 33 + (3 * app_module.MAX_RETRIES)
+    after = summary.after_pdf.read_bytes()
+    assert after.count(b"PROCESSING FAILED") == 3
+    assert b"Reason: forced local transient failure" in after
+    ordered_names = [path.name.encode() for path in inputs]
+    assert [after.index(name) for name in ordered_names] == sorted(
+        after.index(name) for name in ordered_names
+    )
+    assert all((app_module.OUTPUT_DIR / name).exists() for name in set(path.name for path in inputs) - failed_names)
+
+
+def test_after_pdf_uses_placeholder_when_a_logged_success_output_is_missing(tmp_path, app_module):
+    configure_tmp(app_module, tmp_path)
+    source = app_module.INPUT_DIR / "missing-after-save.jpg"
+    textured_image().save(source, format="JPEG")
+    vanished_output = app_module.OUTPUT_DIR / source.name
+    audit = {
+        source.resolve(): {
+            "quality": "medium",
+            "window_pull_classification": "WINDOW_PULL_REQUIRED",
+            "window_pull_reason": "Meaningful window-like opening detected.",
+        }
+    }
+
+    _, after_pdf = app_module.generate_batch_review_pdfs(
+        [source], {source.resolve(): vanished_output}, "missing-saved-output", audit
+    )
+
+    after = after_pdf.read_bytes()
+    assert b"PROCESSING FAILED" in after
+    assert b"Quality: MEDIUM" in after
+    assert b"Smart: WINDOW_PULL_REQUIRED" in after
+    assert b"Output file unavailable when review PDF was generated." in after
+
+
+def test_atomic_output_write_records_existence_size_and_hash(tmp_path, app_module, caplog):
+    configure_tmp(app_module, tmp_path)
+    caplog.set_level(logging.INFO)
+    destination = app_module.OUTPUT_DIR / "verified-output.jpg"
+
+    evidence = app_module._atomic_write(destination, b"verified JPEG bytes")
+
+    assert evidence.path == destination
+    assert evidence.exists
+    assert evidence.byte_size == len(b"verified JPEG bytes")
+    assert evidence.sha256 == hashlib.sha256(b"verified JPEG bytes").hexdigest()
+    assert "Output write verification" in caplog.text
+    assert "exists=true" in caplog.text
+
+
+def test_finalization_detects_output_missing_after_success_without_api_retry(
+    tmp_path, app_module, caplog
+):
+    configure_tmp(app_module, tmp_path)
+    caplog.set_level(logging.INFO)
+    source = app_module.INPUT_DIR / "vanished-after-success.jpg"
+    textured_image().save(source, format="JPEG")
+    output = app_module.OUTPUT_DIR / source.name
+    write_evidence = app_module._atomic_write(output, source.read_bytes())
+    output.unlink()
+    summary = app_module.BatchSummary(selected=1, completed=1)
+
+    app_module.finalize_batch_review_pdfs(
+        summary,
+        [source],
+        {source.resolve(): output},
+        "missing-after-success",
+        {source.resolve(): write_evidence},
+    )
+
+    assert summary.before_pdf and summary.before_pdf.exists()
+    assert summary.after_pdf and summary.after_pdf.exists()
+    assert "OUTPUT_MISSING_AFTER_SUCCESS" in caplog.text
+    assert "Output finalization verification" in caplog.text
+    after = summary.after_pdf.read_bytes()
+    assert b"PROCESSING FAILED" in after
+    assert b"OUTPUT_MISSING_AFTER_SUCCESS" in after
+    assert not output.exists()
 
 
 def test_folder_scan_auto_loads_supported_images(tmp_path, app_module):

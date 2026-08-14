@@ -1640,6 +1640,7 @@ def main() -> None:
 @dataclass
 class BatchSummary:
     total: int = 0
+    selected: int = 0
     completed: int = 0
     review: int = 0
     failed: int = 0
@@ -1654,6 +1655,8 @@ class BatchSummary:
     log_path: Path | None = None
     before_pdf: Path | None = None
     after_pdf: Path | None = None
+    before_pdf_error: str = ""
+    after_pdf_error: str = ""
     review_pdf_error: str = ""
     quality: str = "low"
     elapsed_seconds: float = 0.0
@@ -1663,10 +1666,30 @@ class BatchSummary:
         return self.completed + self.review + self.failed
 
     @property
+    def successful(self) -> int:
+        return self.completed + self.review
+
+    @property
+    def failed_or_skipped(self) -> int:
+        return self.failed + self.skipped
+
+    @property
     def average_cost_per_image(self) -> float:
         if not self.images_processed:
             return 0.0
         return self.fallback_cost / self.images_processed
+
+
+@dataclass(frozen=True)
+class OutputWriteEvidence:
+    """Immutable filesystem evidence captured after an atomic output write."""
+
+    path: Path
+    exists: bool
+    byte_size: int
+    sha256: str
+    timestamp: str
+    error: str = ""
 
 
 def _review_pdf_image_bytes(image_path: Path) -> tuple[bytes, int, int]:
@@ -1713,7 +1736,9 @@ def _draw_after_review_audit(
     quality = audit.get("quality", "—").upper() or "—"
     classification = audit.get("window_pull_classification", "MANUAL_OVERRIDE")
     smart = "MANUAL" if classification == "MANUAL_OVERRIDE" else classification
-    reason = audit.get("window_pull_reason", "Manual quality selection.")
+    reason = audit.get("failure_reason") or audit.get(
+        "window_pull_reason", "Manual quality selection."
+    )
     max_chars = max(24, int(width / 4.7))
     filename_lines = [filename[index : index + max_chars] for index in range(0, len(filename), max_chars)] or [filename]
     reason = reason if len(reason) <= max_chars else f"{reason[:max_chars - 1]}…"
@@ -1741,7 +1766,14 @@ def _draw_review_image_slot(
     caption_height = 64 if after else 30
     image_y = y + caption_height
     image_height = height - caption_height
-    if image_path is None or failed:
+    output_missing = image_path is None or not image_path.is_file()
+    failed = failed or output_missing
+    effective_audit = dict(audit or {})
+    if output_missing and not effective_audit.get("failure_reason"):
+        effective_audit["failure_reason"] = (
+            "Output file unavailable when review PDF was generated."
+        )
+    if failed:
         pdf.setStrokeColor(colors.HexColor("#b91c1c"))
         pdf.setFillColor(colors.HexColor("#fef2f2"))
         pdf.rect(x, image_y, width, image_height, fill=1, stroke=1)
@@ -1765,7 +1797,7 @@ def _draw_review_image_slot(
             mask="auto",
         )
     if after:
-        _draw_after_review_audit(pdf, filename, audit, x, y + 50, width)
+        _draw_after_review_audit(pdf, filename, effective_audit, x, y + 50, width)
     else:
         _draw_review_filename(pdf, filename, x, y + 18, width)
 
@@ -1823,6 +1855,11 @@ def load_review_pdf_audit(log_path: Path | None) -> dict[Path, dict[str, str]]:
                     "quality": row.get("quality", ""),
                     "window_pull_classification": row.get("window_pull_classification", "MANUAL_OVERRIDE"),
                     "window_pull_reason": row.get("window_pull_reason", "Manual quality selection."),
+                    "failure_reason": (
+                        row.get("message", "")
+                        if row.get("status") == "FAILED"
+                        else ""
+                    ),
                 }
                 for row in rows
                 if row.get("filename")
@@ -1859,20 +1896,107 @@ def generate_batch_review_pdfs(
     return before_pdf, after_pdf
 
 
+def _review_pdf_paths(run_id: str) -> tuple[Path, Path]:
+    """Reserve the local review directory once, keeping both PDF names aligned."""
+    review_root = OUTPUT_DIR / "Batch Reviews"
+    review_directory = review_root / run_id
+    suffix = 2
+    while review_directory.exists():
+        review_directory = review_root / f"{run_id}-{suffix}"
+        suffix += 1
+    review_directory.mkdir(parents=True, exist_ok=False)
+    return (
+        review_directory / f"MyEstatePics_{REVIEW_PDF_VERSION}_BEFORE.pdf",
+        review_directory / f"MyEstatePics_{REVIEW_PDF_VERSION}_AFTER.pdf",
+    )
+
+
 def finalize_batch_review_pdfs(
     summary: BatchSummary,
     input_files: list[Path],
     output_paths: dict[Path, Path],
     run_id: str,
+    successful_output_evidence: dict[Path, OutputWriteEvidence] | None = None,
 ) -> None:
-    """Record a secondary local PDF failure without affecting image outcomes."""
-    try:
-        summary.before_pdf, summary.after_pdf = generate_batch_review_pdfs(
-            input_files, output_paths, run_id, load_review_pdf_audit(summary.log_path)
+    """Finalize each local review PDF independently without affecting outputs."""
+    ordered_inputs = sorted(
+        (path.resolve() for path in input_files), key=lambda path: path.name.casefold()
+    )
+    audit_records = load_review_pdf_audit(summary.log_path)
+    for input_path, write_evidence in (successful_output_evidence or {}).items():
+        resolved_input = input_path.resolve()
+        final_evidence = _output_file_evidence(
+            write_evidence.path, stage="finalization"
         )
+        if write_evidence.exists and not final_evidence.exists:
+            message = (
+                "OUTPUT_MISSING_AFTER_SUCCESS: "
+                f"successful_write_exists=true successful_write_bytes="
+                f"{write_evidence.byte_size} successful_write_sha256="
+                f"{write_evidence.sha256 or 'unavailable'} successful_write_timestamp="
+                f"{write_evidence.timestamp} final_path={write_evidence.path}"
+            )
+            logging.error("%s", message)
+            audit_records.setdefault(resolved_input, {})["failure_reason"] = message
+    try:
+        before_pdf, after_pdf = _review_pdf_paths(run_id)
     except Exception as error:
-        summary.review_pdf_error = f"Review PDF generation failed: {type(error).__name__}: {error}"
-        logging.exception(summary.review_pdf_error)
+        message = f"Review PDF directory creation failed: {type(error).__name__}: {error}"
+        summary.before_pdf_error = message
+        summary.after_pdf_error = message
+        summary.review_pdf_error = message
+        logging.exception(message)
+        logging.info(
+            "Batch completion: selected=%d successful=%d failed_skipped=%d "
+            "before_pdf=failed after_pdf=failed",
+            summary.selected,
+            summary.successful,
+            summary.failed_or_skipped,
+        )
+        return
+
+    for label, pdf_path, after in (
+        ("BEFORE", before_pdf, False),
+        ("AFTER", after_pdf, True),
+    ):
+        try:
+            _write_review_contact_sheet(
+                pdf_path, ordered_inputs, output_paths, audit_records, after=after
+            )
+            if after:
+                summary.after_pdf = pdf_path
+            else:
+                summary.before_pdf = pdf_path
+            logging.info(
+                "Batch review PDF created locally: kind=%s path=%s images=%d",
+                label,
+                pdf_path,
+                len(ordered_inputs),
+            )
+        except Exception as error:
+            message = (
+                f"{label} review PDF generation failed: {type(error).__name__}: {error}"
+            )
+            if after:
+                summary.after_pdf_error = message
+            else:
+                summary.before_pdf_error = message
+            logging.exception(message)
+
+    summary.review_pdf_error = " | ".join(
+        error
+        for error in (summary.before_pdf_error, summary.after_pdf_error)
+        if error
+    )
+    logging.info(
+        "Batch completion: selected=%d successful=%d failed_skipped=%d "
+        "before_pdf=%s after_pdf=%s",
+        summary.selected,
+        summary.successful,
+        summary.failed_or_skipped,
+        "created" if summary.before_pdf else "failed",
+        "created" if summary.after_pdf else "failed",
+    )
 
 
 class CancellationToken:
@@ -2308,13 +2432,48 @@ def pending_images(selected_files: list[Path] | None = None) -> tuple[list[Path]
     return pending, len(candidates) - len(pending)
 
 
-def _atomic_write(destination: Path, data: bytes) -> None:
+def _output_file_evidence(path: Path, *, stage: str) -> OutputWriteEvidence:
+    """Record observable output state without changing processing outcomes."""
+    timestamp = datetime.now().isoformat(timespec="seconds")
+    try:
+        if not path.is_file():
+            evidence = OutputWriteEvidence(path, False, 0, "", timestamp)
+        else:
+            digest = hashlib.sha256()
+            with path.open("rb") as output_file:
+                for chunk in iter(lambda: output_file.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            evidence = OutputWriteEvidence(
+                path, True, path.stat().st_size, digest.hexdigest(), timestamp
+            )
+    except OSError as error:
+        evidence = OutputWriteEvidence(
+            path, False, 0, "", timestamp, f"{type(error).__name__}: {error}"
+        )
+
+    logging.info(
+        "Output %s verification: filename=%s path=%s exists=%s bytes=%d "
+        "sha256=%s timestamp=%s error=%s",
+        stage,
+        path.name,
+        path,
+        str(evidence.exists).lower(),
+        evidence.byte_size,
+        evidence.sha256 or "unavailable",
+        evidence.timestamp,
+        evidence.error or "none",
+    )
+    return evidence
+
+
+def _atomic_write(destination: Path, data: bytes) -> OutputWriteEvidence:
     """Prevent cancellation or crashes from leaving a partial JPEG."""
     temporary = destination.with_name(f".{destination.name}.tmp")
     destination.parent.mkdir(parents=True, exist_ok=True)
     try:
         temporary.write_bytes(data)
         os.replace(temporary, destination)
+        return _output_file_evidence(destination, stage="write")
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -2420,7 +2579,9 @@ def process_batch(
     reconcile_history_labels()
     base_prompt = load_prompt()
     files, skipped = pending_images(selected_files)
-    summary = BatchSummary(total=len(files), skipped=skipped, quality=quality)
+    summary = BatchSummary(
+        total=len(files), selected=len(files) + skipped, skipped=skipped, quality=quality
+    )
     if not files:
         summary.elapsed_seconds = time.perf_counter() - batch_started
         return summary
@@ -2429,6 +2590,7 @@ def process_batch(
     run_id = log_path.stem
     local_agent = editing_agent()
     review_pdf_outputs: dict[Path, Path] = {}
+    successful_output_evidence: dict[Path, OutputWriteEvidence] = {}
 
     for index, input_file in enumerate(files, 1):
         if cancel_requested():
@@ -2508,8 +2670,11 @@ def process_batch(
             routing_status = "REVIEW" if needs_review_reason else "PASS"
             destination = REVIEW_DIR if needs_review_reason else OUTPUT_DIR
             filesystem_started = time.perf_counter()
-            _atomic_write(destination / input_file.name, jpeg_bytes)
-            review_pdf_outputs[input_file.resolve()] = destination / input_file.name
+            output_path = destination / input_file.name
+            successful_output_evidence[input_file.resolve()] = _atomic_write(
+                output_path, jpeg_bytes
+            )
+            review_pdf_outputs[input_file.resolve()] = output_path
             timings["filesystem_write_seconds"] = time.perf_counter() - filesystem_started
             if destination == OUTPUT_DIR:
                 summary.completed += 1
@@ -2648,7 +2813,9 @@ def process_batch(
                 },
             )
     summary.elapsed_seconds = time.perf_counter() - batch_started
-    finalize_batch_review_pdfs(summary, files, review_pdf_outputs, run_id)
+    finalize_batch_review_pdfs(
+        summary, files, review_pdf_outputs, run_id, successful_output_evidence
+    )
     return summary
 
 
@@ -2716,7 +2883,9 @@ def process_demo_batch(
         directory.mkdir(parents=True, exist_ok=True)
     initialize_history_db()
     files, skipped = pending_images(selected_files)
-    summary = BatchSummary(total=len(files), skipped=skipped, quality=quality)
+    summary = BatchSummary(
+        total=len(files), selected=len(files) + skipped, skipped=skipped, quality=quality
+    )
     if not files:
         summary.elapsed_seconds = time.perf_counter() - batch_started
         return summary
@@ -2725,6 +2894,7 @@ def process_demo_batch(
     summary.log_path = log_path
     run_id = f"DEMO-{log_path.stem}"
     review_pdf_outputs: dict[Path, Path] = {}
+    successful_output_evidence: dict[Path, OutputWriteEvidence] = {}
 
     for index, input_file in enumerate(files, 1):
         if cancel_requested():
@@ -2758,15 +2928,21 @@ def process_demo_batch(
             destination = OUTPUT_DIR
             message = "DEMO simulated pass; original copied as mock processed result."
             needs_review_reason = ""
-            _atomic_write(destination / input_file.name, input_file.read_bytes())
-            review_pdf_outputs[input_file.resolve()] = destination / input_file.name
+            output_path = destination / input_file.name
+            successful_output_evidence[input_file.resolve()] = _atomic_write(
+                output_path, input_file.read_bytes()
+            )
+            review_pdf_outputs[input_file.resolve()] = output_path
             summary.completed += 1
         elif status == "REVIEW":
             destination = REVIEW_DIR
             needs_review_reason = "DEMO simulated NeedsReview result."
             message = needs_review_reason
-            _atomic_write(destination / input_file.name, input_file.read_bytes())
-            review_pdf_outputs[input_file.resolve()] = destination / input_file.name
+            output_path = destination / input_file.name
+            successful_output_evidence[input_file.resolve()] = _atomic_write(
+                output_path, input_file.read_bytes()
+            )
+            review_pdf_outputs[input_file.resolve()] = output_path
             summary.review += 1
         else:
             destination = ERROR_DIR
@@ -2824,7 +3000,9 @@ def process_demo_batch(
 
     summary.fallback_cost = 0.0
     summary.elapsed_seconds = time.perf_counter() - batch_started
-    finalize_batch_review_pdfs(summary, files, review_pdf_outputs, run_id)
+    finalize_batch_review_pdfs(
+        summary, files, review_pdf_outputs, run_id, successful_output_evidence
+    )
     return summary
 
 
@@ -4153,14 +4331,18 @@ def launch_gui() -> int:
                 else "API token usage was not returned"
             )
             review_pdfs = (
-                f"Before review PDF: {summary.before_pdf}\n"
-                f"After review PDF: {summary.after_pdf}"
-                if summary.before_pdf and summary.after_pdf
-                else summary.review_pdf_error or "Review PDFs were not created."
+                f"Review PDFs:\n"
+                f"BEFORE: {'created' if summary.before_pdf else 'failed'}"
+                f"{f' ({summary.before_pdf})' if summary.before_pdf else f' ({summary.before_pdf_error or 'not created'})'}\n"
+                f"AFTER: {'created' if summary.after_pdf else 'failed'}"
+                f"{f' ({summary.after_pdf})' if summary.after_pdf else f' ({summary.after_pdf_error or 'not created'})'}"
             )
             QMessageBox.information(
                 self,
                 "Demo Batch Summary" if self.demo_checkbox.isChecked() else "Batch summary",
+                f"Selected: {summary.selected}\n"
+                f"Successful: {summary.successful}\n"
+                f"Failed/Skipped: {summary.failed_or_skipped}\n"
                 f"Images processed: {summary.images_processed}\n"
                 f"Quality: {summary.quality.title()}\n"
                 f"Estimated total API cost: ${summary.fallback_cost:.2f}\n"
