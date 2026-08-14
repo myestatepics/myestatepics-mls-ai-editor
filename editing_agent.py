@@ -28,7 +28,32 @@ RULE_CATEGORIES = {
     "WALL", "CEILING", "HARDWOOD", "CARPET", "CABINET", "MIRROR",
     "REFLECTION", "TWILIGHT", "ARTIFACT",
 }
-MASTER_WINDOW_CATEGORIES = frozenset({"WINDOW", "SKY", "SHEER_CURTAIN"})
+# The production prompt owns these safety-critical topics. Local memory may
+# record evidence about them, but must not restate or compete with the master
+# instruction in the one paid Images Edit request.
+MASTER_AUTHORITATIVE_CATEGORIES = frozenset(
+    {
+        "WINDOW",
+        "SKY",
+        "SHEER_CURTAIN",
+        "WALL",
+        "CEILING",
+        "HARDWOOD",
+        "CARPET",
+        "CABINET",
+        "MIRROR",
+        "REFLECTION",
+    }
+)
+MASTER_DUPLICATE_RULE_IDS = frozenset(
+    {
+        "GLOBAL_MATERIALS_001",
+        "GLOBAL_ARTIFACT_001",
+        "INTERIOR_WALLS_001",
+        "HARDWOOD_001",
+        "MIRROR_REFLECTION_001",
+    }
+)
 
 
 def _now() -> str:
@@ -208,10 +233,13 @@ class EditingAgent:
                 continue
             if not set(rule.categories).intersection(context):
                 continue
-            if set(rule.categories).intersection(MASTER_WINDOW_CATEGORIES):
+            if (
+                rule.id in MASTER_DUPLICATE_RULE_IDS
+                or set(rule.categories).intersection(MASTER_AUTHORITATIVE_CATEGORIES)
+            ):
                 suppressed.append(rule.id)
                 self.logger.info(
-                    "Learned rule suppressed because the master window-fidelity prompt is authoritative: %s",
+                    "Learned rule suppressed because the master production prompt is authoritative: %s",
                     rule.id,
                 )
                 continue

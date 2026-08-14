@@ -145,7 +145,7 @@ def test_external_production_prompt_preserves_foundation_and_adds_fidelity_rules
     )
     assert "STRONG PROFESSIONAL MLS WINDOW PULL IS REQUIRED" in loaded_prompt
     assert "Through sheer curtains, blinds, screens" in loaded_prompt
-    assert "light, natural, pleasing, restrained daytime blue" in loaded_prompt
+    assert "light, soft, natural, low-saturation daytime blue" in loaded_prompt
     assert "Avoid deep blue, royal blue, electric blue" in loaded_prompt
     assert "cyan-heavy blue, turquoise, oversaturated blue" in loaded_prompt
     assert "WINDOW DETAIL" not in loaded_prompt
@@ -156,6 +156,8 @@ def test_external_production_prompt_preserves_foundation_and_adds_fidelity_rules
     assert "inside a mirror, reflection, shower glass" in loaded_prompt
     assert "HARDWOOD FLOOR CONTINUITY" in loaded_prompt
     assert "WALL AND CEILING CONTINUITY" in loaded_prompt
+    assert "Target a bright, natural, consistent MLS interior across rooms and angles." in loaded_prompt
+    assert "global overexposure" in loaded_prompt
     assert "MIRROR AND PHOTOGRAPHY-EQUIPMENT REFLECTIONS" in loaded_prompt
     assert "LOCAL MATERIAL HIGHLIGHT PROTECTION" in loaded_prompt
     assert "Do not globally darken the photograph" in loaded_prompt
@@ -217,10 +219,10 @@ def test_direct_images_edit_is_the_only_production_request(
 
 
 def test_application_and_prompt_versions_are_independent(app_module):
-    assert app_module.PROGRAM_VERSION == "4.0.1"
+    assert app_module.PROGRAM_VERSION == "4.0.2"
     assert app_module.PROMPT_VERSION == "V3.1.1"
-    assert app_module.DISPLAY_APPLICATION_NAME == "MyEstatePics AI Editor - Direct V4.0.1"
-    assert app_module.REVIEW_PDF_VERSION == "V4.0.1"
+    assert app_module.DISPLAY_APPLICATION_NAME == "MyEstatePics AI Editor - Direct V4.0.2"
+    assert app_module.REVIEW_PDF_VERSION == "V4.0.2"
 
 
 def test_v4_batch_uses_local_rules_without_an_additional_api_request(tmp_path, app_module):
@@ -243,7 +245,8 @@ def test_v4_batch_uses_local_rules_without_an_additional_api_request(tmp_path, a
     assert summary.api_calls == 1
     assert len(calls) == 1
     assert calls[0]["model"] == "gpt-image-2"
-    assert "APPROVED LOCAL EDITING LESSONS" in calls[0]["prompt"]
+    assert "APPROVED LOCAL EDITING LESSONS" not in calls[0]["prompt"]
+    assert calls[0]["prompt"].count("WINDOW FIDELITY — AUTHORITATIVE") == 1
     assert "WINDOW_IDENTITY_001" not in calls[0]["prompt"]
     with summary.log_path.open(newline="", encoding="utf-8") as handle:
         row = next(csv.DictReader(handle))
@@ -324,8 +327,8 @@ def test_batch_review_pdfs_are_local_ordered_and_preserve_failed_position(
         inputs, outputs, "test-review-pdfs"
     )
 
-    assert before_pdf.name == "MyEstatePics_V4.0.1_BEFORE.pdf"
-    assert after_pdf.name == "MyEstatePics_V4.0.1_AFTER.pdf"
+    assert before_pdf.name == "MyEstatePics_V4.0.2_BEFORE.pdf"
+    assert after_pdf.name == "MyEstatePics_V4.0.2_AFTER.pdf"
     assert before_pdf.parent == after_pdf.parent
     assert before_pdf.read_bytes().startswith(b"%PDF")
     assert after_pdf.read_bytes().startswith(b"%PDF")
@@ -376,7 +379,7 @@ def test_after_review_pdf_uses_saved_smart_audit_without_reanalyzing_images(
     assert b"Reason: No significant window pull detected" in after_bytes
     assert b"Quality: MEDIUM" in after_bytes
     assert b"Smart: MANUAL" in after_bytes
-    assert b"Output file unavailable when review PDF was generated." in after_bytes
+    assert b"OUTPUT MISSING: Output file unavailable when review PDF was generated." in after_bytes
     assert b"PROCESSING FAILED" in after_bytes
 
 
@@ -508,7 +511,7 @@ def test_after_pdf_uses_placeholder_when_a_logged_success_output_is_missing(tmp_
     assert b"PROCESSING FAILED" in after
     assert b"Quality: MEDIUM" in after
     assert b"Smart: WINDOW_PULL_REQUIRED" in after
-    assert b"Output file unavailable when review PDF was generated." in after
+    assert b"OUTPUT MISSING: Output file unavailable when review PDF was generated." in after
 
 
 def test_atomic_output_write_records_existence_size_and_hash(tmp_path, app_module, caplog):

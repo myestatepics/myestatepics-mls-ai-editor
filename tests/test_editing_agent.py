@@ -14,10 +14,14 @@ def test_missing_database_seeds_approved_rules_and_never_uses_api(tmp_path):
     selection = agent.build_instruction(MASTER, Path("Kitchen Window.jpg"))
 
     assert agent.rules_path.exists()
-    assert "GLOBAL_MATERIALS_001" in selection.applied_rule_ids
+    assert selection.applied_rule_ids == ()
     assert "WINDOW_IDENTITY_001" not in selection.applied_rule_ids
-    assert selection.suppressed_rule_ids == ()
-    assert "APPROVED LOCAL EDITING LESSONS" in selection.instruction
+    assert set(selection.suppressed_rule_ids) == {
+        "GLOBAL_ARTIFACT_001",
+        "GLOBAL_MATERIALS_001",
+        "INTERIOR_WALLS_001",
+    }
+    assert selection.instruction == MASTER
     assert not hasattr(agent, "client")
     assert not hasattr(agent, "images")
 
@@ -42,7 +46,7 @@ def test_only_approved_enabled_and_relevant_rules_are_appended(tmp_path):
     assert "DISABLED_001" not in window.instruction
 
 
-def test_window_sky_and_sheer_rules_are_suppressed_in_favor_of_master_prompt(tmp_path, caplog):
+def test_master_protected_rules_are_suppressed_in_favor_of_master_prompt(tmp_path, caplog):
     agent = EditingAgent(tmp_path)
     rules = [
         LearnedRule("WINDOW_OK_001", ("WINDOW",), "Window", "Duplicate window rule.", "APPROVED"),
@@ -55,12 +59,14 @@ def test_window_sky_and_sheer_rules_are_suppressed_in_favor_of_master_prompt(tmp
     with caplog.at_level("INFO"):
         selection = agent.build_instruction(MASTER, Path("Kitchen Window Sky Sheer Curtain Hardwood.jpg"))
 
-    assert selection.applied_rule_ids == ("HARDWOOD_OK_001",)
-    assert selection.suppressed_rule_ids == ("SHEER_OK_001", "SKY_OK_001", "WINDOW_OK_001")
+    assert selection.applied_rule_ids == ()
+    assert selection.suppressed_rule_ids == (
+        "HARDWOOD_OK_001", "SHEER_OK_001", "SKY_OK_001", "WINDOW_OK_001"
+    )
     assert "WINDOW_OK_001" not in selection.instruction
     assert "SKY_OK_001" not in selection.instruction
     assert "SHEER_OK_001" not in selection.instruction
-    assert "master window-fidelity prompt is authoritative" in caplog.text
+    assert "master production prompt is authoritative" in caplog.text
 
 
 def test_corrupt_or_invalid_memory_falls_back_to_master_prompt(tmp_path):

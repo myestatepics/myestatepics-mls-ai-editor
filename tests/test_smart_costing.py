@@ -58,7 +58,9 @@ def save_exposed_meaningful_window(path: Path) -> Image.Image:
 
 def save_uncertain(path: Path) -> Image.Image:
     image = np.full((200, 300, 3), 70, dtype=np.uint8)
-    image[::5, ::5] = 245
+    # A medium-sized compact bright opening: too consequential to dismiss as
+    # incidental, but below the substantial-window threshold.
+    image[60:105, 100:160] = 245
     result = Image.fromarray(image)
     result.save(path, "JPEG", quality=95)
     return result
@@ -99,6 +101,27 @@ def test_production_smart_cost_regressions_route_windows_to_medium(tmp_path):
     assert select_smart_quality(assess_window_pull(image_38)) == "medium"
     assert select_smart_quality(assess_window_pull(image_44)) == "medium"
     assert select_smart_quality(assess_window_pull(image_52)) == "low"
+
+
+def test_clear_no_window_room_types_route_to_low(tmp_path):
+    for room_name in ("Closet.jpg", "Hallway.jpg", "Basement.jpg"):
+        image_path = tmp_path / room_name
+        save_dark(image_path)
+        assessment = assess_window_pull(image_path)
+        assert assessment.classification == NO_WINDOW_PULL
+        assert select_smart_quality(assessment) == "low"
+
+
+def test_tiny_incidental_bright_area_routes_to_low(tmp_path):
+    source = tmp_path / "Bathroom detail.jpg"
+    image = np.full((200, 300, 3), 90, dtype=np.uint8)
+    image[50:75, 125:150] = 245
+    Image.fromarray(image).save(source, "JPEG", quality=95)
+
+    assessment = assess_window_pull(source)
+
+    assert assessment.classification == NO_WINDOW_PULL
+    assert select_smart_quality(assessment) == "low"
 
 
 def test_smart_resolver_maps_no_window_to_low_and_uncertain_to_medium(tmp_path, app_module):

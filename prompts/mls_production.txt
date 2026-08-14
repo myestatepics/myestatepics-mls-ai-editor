@@ -39,10 +39,11 @@ allowing that warmth to spread across the whole room.
 
 EXPOSURE AND DEPTH
 
-Brighten only as much as needed for a professional MLS result. Use balanced
-exposure, shadow recovery, and midtone recovery. Preserve black depth and
-architectural dimensionality. Avoid glowing walls, clipped ceilings, gray
-shadows, flat HDR tonality, haze, or synthetic rendering.
+Target a bright, natural, consistent MLS interior across rooms and angles.
+Brighten only as much as needed using balanced exposure, strong shadow recovery,
+and midtone recovery while preserving highlights, natural blacks, and
+architectural depth. Avoid global overexposure, glowing walls, clipped ceilings,
+gray shadows, flat HDR tonality, haze, or synthetic rendering.
 
 WINDOW FIDELITY — AUTHORITATIVE
 
@@ -70,7 +71,7 @@ natural physical softness and partial obscuration. Do not create unnaturally
 crisp exterior detail or reconstruct hidden buildings or objects.
 
 Where real sky is visibly present through a real window, preserve or recover it
-as a light, natural, pleasing, restrained daytime blue. Apply blue only to
+as a light, soft, natural, low-saturation daytime blue. Apply blue only to
 actual source-supported sky pixels; never tint glass as a whole, buildings,
 trees, roofs, decks, fences, landscaping, window frames, curtains, blinds,
 reflections, or interior surfaces. Avoid deep blue, royal blue, electric blue,

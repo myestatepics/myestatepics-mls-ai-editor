@@ -4,6 +4,23 @@ This file records the production architecture history relevant to the frozen
 Direct release. The older engineering timeline remains available in
 [`docs/CHANGELOG.md`](docs/CHANGELOG.md).
 
+## V4.0.2 production reliability and Smart Cost update
+
+- New versioned application and installer name: `MyEstatePics AI Editor - Direct V4.0.2`.
+- Carries forward the V4.0.1 partial-batch reliability fix: BEFORE and AFTER
+  review PDFs finalize independently, failed or missing outputs retain their
+  matched position, and batch summaries report their separate PDF states.
+- Records write-time and finalization-time output existence, size, SHA-256, and
+  timestamp evidence. A previously verified missing output is logged as
+  `OUTPUT_MISSING_AFTER_SUCCESS`; it is never automatically reprocessed.
+- Smart Cost now selects Low for clear no-window, closet, hallway, basement,
+  detail, and tiny-incidental-opening cases. Medium remains reserved for
+  substantial or genuinely ambiguous window/exterior-view openings; High stays
+  manual-only and Auto remains unavailable.
+- The authoritative prompt retains the factual exterior lock and strong window
+  pull, with a bright natural MLS exposure target and light, soft,
+  low-saturation source-supported sky guidance.
+
 ## V4.0.1 production hotfix
 
 - New versioned application and installer name: `MyEstatePics AI Editor - Direct V4.0.1`.

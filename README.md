@@ -1,4 +1,4 @@
-# MyEstatePics AI Editor — Direct V4.0.1
+# MyEstatePics AI Editor — Direct V4.0.2
 
 MyEstatePics AI Editor is a macOS PySide6 desktop application for conservative,
 batch-oriented enhancement of real-estate photographs. The frozen production
@@ -21,7 +21,7 @@ not alter JPEG outputs or make any API request.
 
 - Production source baseline before this documentation freeze:
   `8321ed302e74acfca4079c8c948cd43310f879b0` (V3.1.1 frozen baseline)
-- Application badge: `Production v4.0.1` / `Prompt V3.1.1`
+- Application badge: `Production v4.0.2` / `Prompt V3.1.1`
 - Production model: `gpt-image-2`
 - Production endpoint: `/v1/images/edits`
 - API requests: one direct image-edit request per successful image; a genuine
@@ -34,8 +34,8 @@ for actual charges.
 
 ## Install the Direct application
 
-1. Open `MyEstatePics AI Editor - Direct V4.0.1.dmg`.
-2. Drag **MyEstatePics AI Editor - Direct V4.0.1** to **Applications**.
+1. Open `MyEstatePics AI Editor - Direct V4.0.2.dmg`.
+2. Drag **MyEstatePics AI Editor - Direct V4.0.2** to **Applications**.
 3. On first launch, Control-click the application, choose **Open**, and confirm
    **Open** if macOS warns that the developer cannot be verified.
 4. Add the API key to:

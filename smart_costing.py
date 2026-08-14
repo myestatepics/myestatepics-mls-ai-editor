@@ -48,7 +48,7 @@ def _components(mask: np.ndarray) -> list[tuple[int, int, int, int, int]]:
 
 
 def assess_window_pull(image_path: Path) -> WindowPullAssessment:
-    """Choose Low only for a clear no-window case; ambiguity intentionally costs Medium."""
+    """Use Medium only for a meaningful or genuinely ambiguous window opening."""
     filename = image_path.stem.casefold()
     if any(token in filename for token in ("exterior", "outside", "front", "rear", "backyard", "landscape")):
         return WindowPullAssessment(NO_WINDOW_PULL, "Exterior image; interior window recovery is not applicable.")
@@ -62,19 +62,15 @@ def assess_window_pull(image_path: Path) -> WindowPullAssessment:
 
     luminance = 0.2126 * pixels[..., 0] + 0.7152 * pixels[..., 1] + 0.0722 * pixels[..., 2]
     # A window may expose correctly while still requiring a stronger MLS pull.
-    # Brightness therefore provides positive evidence, never the sole condition
-    # for Medium.  We reserve Low for a uniformly dark, low-detail image where
-    # there is no meaningful local signal of a window or exterior-view opening.
+    # Brightness is therefore evidence, but broad room brightness, exposure, or
+    # ordinary texture alone must not make every interior cost Medium.
     bright = luminance >= 0.86
-    bright_fraction = float(bright.mean())
-    detail = np.abs(np.diff(luminance, axis=0)).mean() + np.abs(
-        np.diff(luminance, axis=1)
-    ).mean()
     luminance_span = float(np.percentile(luminance, 95) - np.percentile(luminance, 5))
-
     image_area = bright.size
 
-    def has_large_window_like_component(mask: np.ndarray) -> bool:
+    def component_kind(mask: np.ndarray) -> str:
+        """Classify local bright openings without inferring scene semantics."""
+        ambiguous = False
         for area, min_x, min_y, max_x, max_y in _components(mask):
             component_fraction = area / image_area
             box_width = max_x - min_x + 1
@@ -82,39 +78,72 @@ def assess_window_pull(image_path: Path) -> WindowPullAssessment:
             box_area = box_width * box_height
             fill = area / box_area
             if (
-                component_fraction >= 0.035
-                and fill >= 0.30
+                component_fraction >= 0.065
+                and fill >= 0.35
+                and max(box_width, box_height) >= 0.28 * max(mask.shape)
+            ):
+                return WINDOW_PULL_REQUIRED
+            if (
+                component_fraction >= 0.025
+                and fill >= 0.28
                 and max(box_width, box_height) >= 0.18 * max(mask.shape)
             ):
-                return True
-        return False
+                ambiguous = True
+        return UNCERTAIN if ambiguous else NO_WINDOW_PULL
 
-    if has_large_window_like_component(bright):
+    bright_kind = component_kind(bright)
+    if bright_kind == WINDOW_PULL_REQUIRED:
         return WindowPullAssessment(
             WINDOW_PULL_REQUIRED,
-            "Meaningful bright window-like opening detected; exterior recovery is likely valuable.",
+            "Substantial bright window-like opening detected; exterior recovery is likely valuable.",
         )
-
-    # Correctly exposed windows are often not bright enough for the previous
-    # threshold. A large, clearly separated light opening is still meaningful.
-    window_candidate = luminance >= 0.55
-    if has_large_window_like_component(window_candidate) and luminance_span >= 0.20:
-        return WindowPullAssessment(
-            WINDOW_PULL_REQUIRED,
-            "Meaningful window-like opening detected even without blown highlights.",
-        )
-
-    if bright_fraction >= 0.008 or luminance_span >= 0.20 or detail >= 0.075:
+    if bright_kind == UNCERTAIN:
         return WindowPullAssessment(
             UNCERTAIN,
-            "Potential window or exterior-view opening cannot be ruled out locally; Medium selected for safety.",
+            "Medium-sized bright opening could be meaningful; Medium selected for safety.",
+        )
+
+    # Correctly exposed windows are often not bright enough for the bright
+    # threshold. A substantial, clearly separated light opening still merits
+    # Medium, while a small incidental opening does not.
+    window_candidate = luminance >= 0.55
+    candidate_kind = component_kind(window_candidate)
+    if candidate_kind == WINDOW_PULL_REQUIRED and luminance_span >= 0.16:
+        return WindowPullAssessment(
+            WINDOW_PULL_REQUIRED,
+            "Substantial window-like opening detected even without blown highlights.",
+        )
+    if candidate_kind == UNCERTAIN and luminance_span >= 0.16:
+        return WindowPullAssessment(
+            UNCERTAIN,
+            "Medium-sized light opening could be meaningful; Medium selected for safety.",
+        )
+
+    room_hint = next(
+        (
+            label
+            for label, tokens in {
+                "Closet": ("closet",),
+                "Hallway": ("hall", "hallway"),
+                "Basement": ("basement",),
+                "Detail": ("detail",),
+                "Garage interior": ("garage",),
+            }.items()
+            if any(token in filename for token in tokens)
+        ),
+        "",
+    )
+    if room_hint:
+        return WindowPullAssessment(
+            NO_WINDOW_PULL,
+            f"{room_hint} has no substantial locally detected window opening.",
         )
     return WindowPullAssessment(
         NO_WINDOW_PULL,
-        "No meaningful window-pull indicators detected in a uniformly low-detail image.",
+        "No substantial local window-pull indicator detected; Low selected.",
     )
 
 
 def select_smart_quality(assessment: WindowPullAssessment) -> str:
-    """Low is used only for a clear no-window-pull assessment; never returns High."""
+    """Smart Cost never returns High; only meaningful/uncertain openings use Medium."""
     return "low" if assessment.classification == NO_WINDOW_PULL else "medium"
