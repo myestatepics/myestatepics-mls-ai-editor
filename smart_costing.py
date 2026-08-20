@@ -100,7 +100,7 @@ def assess_window_pull(image_path: Path) -> WindowPullAssessment:
     if bright_kind == UNCERTAIN:
         return WindowPullAssessment(
             UNCERTAIN,
-            "Medium-sized bright opening could be meaningful; Medium selected for safety.",
+            "Medium-sized bright opening is not confirmed as MLS-relevant.",
         )
 
     # Correctly exposed windows are often not bright enough for the bright
@@ -116,7 +116,7 @@ def assess_window_pull(image_path: Path) -> WindowPullAssessment:
     if candidate_kind == UNCERTAIN and luminance_span >= 0.16:
         return WindowPullAssessment(
             UNCERTAIN,
-            "Medium-sized light opening could be meaningful; Medium selected for safety.",
+            "Medium-sized light opening is not confirmed as MLS-relevant.",
         )
 
     room_hint = next(
@@ -145,5 +145,5 @@ def assess_window_pull(image_path: Path) -> WindowPullAssessment:
 
 
 def select_smart_quality(assessment: WindowPullAssessment) -> str:
-    """Smart Cost never returns High; only meaningful/uncertain openings use Medium."""
-    return "low" if assessment.classification == NO_WINDOW_PULL else "medium"
+    """Reserve Medium for a confirmed window pull; Smart never returns High."""
+    return "medium" if assessment.classification == WINDOW_PULL_REQUIRED else "low"

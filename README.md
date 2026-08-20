@@ -1,4 +1,4 @@
-# MyEstatePics AI Editor — Direct V4.0.2
+# MyEstatePics AI Editor — Direct V4.0.3
 
 MyEstatePics AI Editor is a macOS PySide6 desktop application for conservative,
 batch-oriented enhancement of real-estate photographs. The frozen production
@@ -17,11 +17,15 @@ Each processed batch also creates local Before/After contact-sheet PDFs under
 `Completed/Batch Reviews/<run-id>/`. They are review documents only: they do
 not alter JPEG outputs or make any API request.
 
+V4.0.3 production validation is governed by the
+[regression manifest](docs/V4_0_3_REGRESSION_MANIFEST.md). It distinguishes
+offline checks from individually approved paid-image validation.
+
 ## Production status
 
 - Production source baseline before this documentation freeze:
   `8321ed302e74acfca4079c8c948cd43310f879b0` (V3.1.1 frozen baseline)
-- Application badge: `Production v4.0.2` / `Prompt V3.1.1`
+- Application badge: `Production v4.0.3` / `Prompt V4.0.3` (release date: `2026-08-20`)
 - Production model: `gpt-image-2`
 - Production endpoint: `/v1/images/edits`
 - API requests: one direct image-edit request per successful image; a genuine
@@ -34,8 +38,8 @@ for actual charges.
 
 ## Install the Direct application
 
-1. Open `MyEstatePics AI Editor - Direct V4.0.2.dmg`.
-2. Drag **MyEstatePics AI Editor - Direct V4.0.2** to **Applications**.
+1. Open `MyEstatePics AI Editor - Direct V4.0.3.dmg`.
+2. Drag **MyEstatePics AI Editor - Direct V4.0.3** to **Applications**.
 3. On first launch, Control-click the application, choose **Open**, and confirm
    **Open** if macOS warns that the developer cannot be verified.
 4. Add the API key to:
@@ -76,8 +80,9 @@ no API calls.
 
 The **Quality** selector supports:
 
-- **Smart** — local-only assessment chooses Low only for a clear no-window case;
-  meaningful or uncertain window/exterior-view openings use Medium
+- **Smart** — local-only assessment chooses Medium only for a confirmed
+  substantial exterior-facing opening; clear no-window and unconfirmed cases
+  use Low
 - **Low** — manual lower-cost override
 - **Medium** — sends `quality="medium"` to the same direct Images Edit request
 - **High** — sends `quality="high"` to the same direct Images Edit request

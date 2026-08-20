@@ -66,7 +66,7 @@ def save_uncertain(path: Path) -> Image.Image:
     return result
 
 
-def test_local_window_assessment_selects_low_medium_and_never_high(tmp_path):
+def test_local_window_assessment_reserves_medium_for_confirmed_window_and_never_high(tmp_path):
     dark = tmp_path / "Bedroom.jpg"
     bright = tmp_path / "Kitchen Window.jpg"
     uncertain = tmp_path / "Room.jpg"
@@ -83,11 +83,11 @@ def test_local_window_assessment_selects_low_medium_and_never_high(tmp_path):
     assert unsure.classification == UNCERTAIN
     assert select_smart_quality(no_window) == "low"
     assert select_smart_quality(required) == "medium"
-    assert select_smart_quality(unsure) == "medium"
+    assert select_smart_quality(unsure) == "low"
     assert "high" not in {select_smart_quality(no_window), select_smart_quality(required), select_smart_quality(unsure)}
 
 
-def test_production_smart_cost_regressions_route_windows_to_medium(tmp_path):
+def test_production_smart_cost_regressions_route_confirmed_windows_to_medium(tmp_path):
     image_35 = tmp_path / "Production-35.jpg"
     image_38 = tmp_path / "Production-38.jpg"
     image_44 = tmp_path / "Production-44.jpg"
@@ -99,7 +99,7 @@ def test_production_smart_cost_regressions_route_windows_to_medium(tmp_path):
 
     assert select_smart_quality(assess_window_pull(image_35)) == "medium"
     assert select_smart_quality(assess_window_pull(image_38)) == "medium"
-    assert select_smart_quality(assess_window_pull(image_44)) == "medium"
+    assert select_smart_quality(assess_window_pull(image_44)) == "low"
     assert select_smart_quality(assess_window_pull(image_52)) == "low"
 
 
@@ -124,13 +124,13 @@ def test_tiny_incidental_bright_area_routes_to_low(tmp_path):
     assert select_smart_quality(assessment) == "low"
 
 
-def test_smart_resolver_maps_no_window_to_low_and_uncertain_to_medium(tmp_path, app_module):
+def test_smart_resolver_maps_no_window_and_uncertain_to_low(tmp_path, app_module):
     dark = tmp_path / "Bedroom.jpg"
     uncertain = tmp_path / "Room.jpg"
     save_dark(dark)
     save_uncertain(uncertain)
     assert app_module.quality_for_image("smart", dark)[0] == "low"
-    assert app_module.quality_for_image("smart", uncertain)[0] == "medium"
+    assert app_module.quality_for_image("smart", uncertain)[0] == "low"
 
 
 def test_manual_quality_overrides_smart_classifier(tmp_path, app_module):

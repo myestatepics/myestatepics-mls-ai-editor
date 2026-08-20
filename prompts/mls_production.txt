@@ -1,4 +1,4 @@
-MYESTATEPICS MLS INTERIOR — PRODUCTION BASE PROMPT v1.6
+MYESTATEPICS MLS INTERIOR — PRODUCTION PROMPT V4.0.3
 
 PHOTO CORRECTION ONLY
 
@@ -11,12 +11,14 @@ reflections, or exterior structures.
 
 PRIORITY ORDER
 
-1. Preserve exact material identity and room geometry.
-2. Establish strictly neutral white balance with no global cast.
-3. Produce naturally bright MLS exposure while retaining depth.
-4. Recover crisp, realistic exterior detail through windows.
-5. Improve only genuinely visible, source-supported open-sky pixels with a
-   soft natural light-blue tone.
+1. Deliver a professional MLS window pull through genuine exterior-facing
+   windows and glass doors.
+2. Preserve exact material identity, color, and room geometry.
+3. Produce a bright natural MLS interior with useful shadow and midtone detail.
+4. Correct only artificial low-frequency illumination inconsistency on large
+   continuous surfaces while retaining real light falloff and depth.
+5. Preserve architectural depth and a natural photographic look.
+6. Cost selection is external to this prompt and must never weaken items 1–5.
 
 MATERIAL COLOR LOCK
 
@@ -47,10 +49,11 @@ gray shadows, flat HDR tonality, haze, or synthetic rendering.
 
 WINDOW FIDELITY — AUTHORITATIVE
 
-STRONG PROFESSIONAL MLS WINDOW PULL IS REQUIRED for a real existing window or
-glass door. Improve exterior exposure, visibility, natural contrast,
-recoverable exterior detail, and natural exterior color while preserving the
-identity and geometry of the actual exterior scene.
+STRONG PROFESSIONAL MLS WINDOW PULL IS REQUIRED for a real existing
+exterior-facing window or glass door. Recover the real exterior first: deliver
+clearly readable source-supported trees, landscaping, houses, buildings,
+ground, roads, fences, and structures with realistic photographic contrast,
+while preserving the identity and geometry of the actual exterior scene.
 
 Never create, infer, or introduce a new window, opening, house, neighboring
 building, roof, garage, fence, vehicle, tree, road, structure, or exterior
@@ -62,23 +65,26 @@ complete.
 
 Preserve all source-supported exterior objects, including houses, trees,
 landscaping, decks, fences, roads, driveways, vehicles, roofs, and window
-frames. If exterior information is incomplete, clipped, hidden, blurred, or
-uncertain, enhance only what is supported by the source image; do not fabricate
-a plausible exterior scene.
+frames. If exterior architecture or objects are incomplete, clipped, hidden,
+blurred, or uncertain, enhance only what is supported by the source image; do
+not fabricate a plausible exterior scene.
 
 Through sheer curtains, blinds, screens, or similar material, preserve the
 natural physical softness and partial obscuration. Do not create unnaturally
 crisp exterior detail or reconstruct hidden buildings or objects.
 
 Where real sky is visibly present through a real window, preserve or recover it
-as a light, soft, natural, low-saturation daytime blue. Apply blue only to
-actual source-supported sky pixels; never tint glass as a whole, buildings,
+as a light, soft, natural, low-saturation daytime blue with real clouds when
+recoverable. If the visible sky portion alone is irrecoverably clipped to
+featureless white, replace only that sky portion with the same restrained light
+natural MLS blue fallback; featureless white sky is not an acceptable result.
+Apply blue only to actual sky pixels; never tint glass as a whole, buildings,
 trees, roofs, decks, fences, landscaping, window frames, curtains, blinds,
-reflections, or interior surfaces. Avoid deep blue, royal blue, electric blue,
-cobalt blue, cyan-heavy blue, turquoise, oversaturated blue, dramatic HDR blue,
-or artificial AI-looking sky. If sky information is uncertain or unavailable,
-do not fabricate sky detail. Factual exterior preservation has priority over
-aesthetic perfection.
+reflections, or interior surfaces. Never use sky fallback to invent or alter
+exterior architecture, objects, horizon geometry, or scenery. Avoid deep blue,
+royal blue, electric blue, cobalt blue, cyan-heavy blue, turquoise,
+oversaturated blue, dramatic HDR blue, or artificial AI-looking sky. Factual
+exterior preservation has priority over aesthetic perfection.
 
 Never create a fake window, fake outdoor scenery, or fake reflection. Mirrors
 must continue to reflect the original room; never generate outdoor scenery
@@ -137,10 +143,10 @@ Preserve exact original paint color, material, architecture, natural light
 falloff, corners, real shadows, trim, molding, outlets, switches, vents,
 fixtures, doors, and openings. Correct only artificial localized highlight,
 darkness, white-balance drift, color contamination, gray patches, dark
-patches, dirty blotches, cloudy spots, faint wavy tonal variation, or AI-made
-mottling on otherwise smooth neutral walls and ceilings. Do not repaint,
-recolor, flatten, plasticize, erase legitimate shadows, erase features, or
-manufacture texture.
+patches, dirty blotches, cloudy spots, faint wavy tonal variation, exposure
+bands, or AI-made mottling on otherwise smooth neutral walls, ceilings, and
+continuous carpet. Do not repaint, recolor, flatten, plasticize, erase
+legitimate shadows, erase features, or manufacture texture.
 
 MIRROR AND PHOTOGRAPHY-EQUIPMENT REFLECTIONS
 

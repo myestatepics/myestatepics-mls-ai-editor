@@ -129,7 +129,7 @@ def test_external_production_prompt_preserves_foundation_and_adds_fidelity_rules
     assert app_module.PROMPT_FILE == external_prompt
     loaded_prompt = app_module.load_prompt()
     assert loaded_prompt.startswith(
-        "MYESTATEPICS MLS INTERIOR — PRODUCTION BASE PROMPT v1.6\n\n"
+        "MYESTATEPICS MLS INTERIOR — PRODUCTION PROMPT V4.0.3\n\n"
         "PHOTO CORRECTION ONLY"
     )
     assert "STRICTLY NEUTRAL WHITE BALANCE" in loaded_prompt
@@ -138,6 +138,8 @@ def test_external_production_prompt_preserves_foundation_and_adds_fidelity_rules
     assert "ARCHITECTURAL FIDELITY" in loaded_prompt
     assert "Mirror reflections must remain physically accurate" in loaded_prompt
     assert loaded_prompt.count("WINDOW FIDELITY — AUTHORITATIVE") == 1
+    assert "1. Deliver a professional MLS window pull" in loaded_prompt
+    assert "6. Cost selection is external to this prompt" in loaded_prompt
     assert "Never invent architecture that does not exist." in loaded_prompt
     assert (
         "Never convert an ordinary wall, door, opening, bright region"
@@ -146,8 +148,12 @@ def test_external_production_prompt_preserves_foundation_and_adds_fidelity_rules
     assert "STRONG PROFESSIONAL MLS WINDOW PULL IS REQUIRED" in loaded_prompt
     assert "Through sheer curtains, blinds, screens" in loaded_prompt
     assert "light, soft, natural, low-saturation daytime blue" in loaded_prompt
-    assert "Avoid deep blue, royal blue, electric blue" in loaded_prompt
-    assert "cyan-heavy blue, turquoise, oversaturated blue" in loaded_prompt
+    assert "featureless white sky is not an acceptable result" in loaded_prompt
+    assert "replace only that sky portion" in loaded_prompt
+    assert "Avoid deep blue," in loaded_prompt
+    assert "royal blue, electric blue" in loaded_prompt
+    assert "cobalt blue, cyan-heavy blue, turquoise," in loaded_prompt
+    assert "oversaturated blue" in loaded_prompt
     assert "WINDOW DETAIL" not in loaded_prompt
     assert "LIGHT-BLUE SKY THROUGH WINDOWS" not in loaded_prompt
     assert "V3.1 RESTRAINED NATURAL WINDOW SKY" not in loaded_prompt
@@ -158,6 +164,7 @@ def test_external_production_prompt_preserves_foundation_and_adds_fidelity_rules
     assert "WALL AND CEILING CONTINUITY" in loaded_prompt
     assert "Target a bright, natural, consistent MLS interior across rooms and angles." in loaded_prompt
     assert "global overexposure" in loaded_prompt
+    assert "exposure\nbands" in loaded_prompt
     assert "MIRROR AND PHOTOGRAPHY-EQUIPMENT REFLECTIONS" in loaded_prompt
     assert "LOCAL MATERIAL HIGHLIGHT PROTECTION" in loaded_prompt
     assert "Do not globally darken the photograph" in loaded_prompt
@@ -219,10 +226,11 @@ def test_direct_images_edit_is_the_only_production_request(
 
 
 def test_application_and_prompt_versions_are_independent(app_module):
-    assert app_module.PROGRAM_VERSION == "4.0.2"
-    assert app_module.PROMPT_VERSION == "V3.1.1"
-    assert app_module.DISPLAY_APPLICATION_NAME == "MyEstatePics AI Editor - Direct V4.0.2"
-    assert app_module.REVIEW_PDF_VERSION == "V4.0.2"
+    assert app_module.PROGRAM_VERSION == "4.0.3"
+    assert app_module.RELEASE_DATE == "2026-08-20"
+    assert app_module.PROMPT_VERSION == "V4.0.3"
+    assert app_module.DISPLAY_APPLICATION_NAME == "MyEstatePics AI Editor - Direct V4.0.3"
+    assert app_module.REVIEW_PDF_VERSION == "V4.0.3"
 
 
 def test_v4_batch_uses_local_rules_without_an_additional_api_request(tmp_path, app_module):
@@ -327,8 +335,8 @@ def test_batch_review_pdfs_are_local_ordered_and_preserve_failed_position(
         inputs, outputs, "test-review-pdfs"
     )
 
-    assert before_pdf.name == "MyEstatePics_V4.0.2_BEFORE.pdf"
-    assert after_pdf.name == "MyEstatePics_V4.0.2_AFTER.pdf"
+    assert before_pdf.name == "MyEstatePics_V4.0.3_BEFORE.pdf"
+    assert after_pdf.name == "MyEstatePics_V4.0.3_AFTER.pdf"
     assert before_pdf.parent == after_pdf.parent
     assert before_pdf.read_bytes().startswith(b"%PDF")
     assert after_pdf.read_bytes().startswith(b"%PDF")
@@ -849,7 +857,7 @@ def test_paid_confirmation_summarizes_only_checked_images(app_module):
     assert "Quality: Medium" in text
     assert "Estimated cost: $0.32" in text
     assert "Demo Mode: Off" in text
-    assert "Prompt: MLS Production V3" in text
+    assert "Prompt: MLS Production V4.0.3" in text
 
 
 def test_retry_confirmation_queues_without_claiming_to_start(app_module):

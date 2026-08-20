@@ -4,6 +4,23 @@ This file records the production architecture history relevant to the frozen
 Direct release. The older engineering timeline remains available in
 [`docs/CHANGELOG.md`](docs/CHANGELOG.md).
 
+## V4.0.3 final production stabilization — 2026-08-20
+
+- New versioned application and installer name: `MyEstatePics AI Editor - Direct V4.0.3`.
+- Establishes the release priority order: real window pull first, then material
+  fidelity, interior exposure, surface uniformity, natural depth, and finally
+  Smart Cost optimization.
+- Consolidates the authoritative window rule so real exterior information is
+  recovered first and an irrecoverably clipped visible-sky portion may receive
+  only a restrained light-natural-blue fallback. Exterior architecture and
+  objects remain source-bound and must never be invented.
+- Refines Smart Cost so only confirmed `WINDOW_PULL_REQUIRED` assessments use
+  Medium. `UNCERTAIN` no longer raises cost by itself; Low, Medium, and High
+  manual selections remain unchanged, and Auto remains unavailable.
+- Retains the V4.0.2 one-request direct Images Edit architecture, local Premium
+  Finish, JPEG settings, PDF reliability fix, folder protections, and output
+  disappearance diagnostics.
+
 ## V4.0.2 production reliability and Smart Cost update
 
 - New versioned application and installer name: `MyEstatePics AI Editor - Direct V4.0.2`.
