@@ -1,5 +1,5 @@
 """
-MyEstatePics MLS Interior Batch Editor — Direct V4.0.3
+MyEstatePics MLS Interior Batch Editor — Direct V4.0.4
 
 Workflow:
     Incoming/*.jpg or *.jpeg
@@ -68,8 +68,8 @@ from reportlab.pdfgen import canvas
 DEFAULT_APPLICATION_NAME = "MyEstatePics AI Editor"
 DIRECT_TEST_APPLICATION_NAME = "MyEstatePics AI Editor - Direct"
 # The bundle/Finder name is versioned, but this identity deliberately remains
-# stable so V4.0.3 reuses the established Direct Application Support settings.
-DISPLAY_APPLICATION_NAME = "MyEstatePics AI Editor - Direct V4.0.3"
+# stable so V4.0.4 reuses the established Direct Application Support settings.
+DISPLAY_APPLICATION_NAME = "MyEstatePics AI Editor - Direct V4.0.4"
 APPLICATION_NAME = os.environ.get(
     "MYESTATEPICS_APPLICATION_NAME", DEFAULT_APPLICATION_NAME
 )
@@ -155,11 +155,11 @@ PROMPT_FILE = resource_path("prompts/mls_production.txt")
 LEARNED_RULES_FILE = USER_DATA_DIR / "learned_rules.json"
 FEEDBACK_HISTORY_FILE = USER_DATA_DIR / "feedback_history.jsonl"
 
-PROGRAM_VERSION = "4.0.3"
+PROGRAM_VERSION = "4.0.4"
 RELEASE_DATE = "2026-08-20"
-PROMPT_VERSION = "V4.0.3"
+PROMPT_VERSION = "V4.0.4"
 MODEL = "gpt-image-2"
-QUALITY = "low"
+QUALITY = "medium"
 QUALITY_OPTIONS = ("low", "medium", "high")
 QUALITY_MODES = ("smart",) + QUALITY_OPTIONS
 QUALITY_SETTING = "ui/quality"
@@ -170,7 +170,7 @@ SQUARE_SIZE = "1024x1024"
 IMAGES_EDIT_API_PATH = "/v1/images/edits"
 API_OUTPUT_FORMAT = "png"
 JPEG_OUTPUT_QUALITY = 100
-REVIEW_PDF_VERSION = "V4.0.3"
+REVIEW_PDF_VERSION = "V4.0.4"
 REVIEW_PDF_MAX_IMAGE_EDGE = 1200
 DPI = (300, 300)
 OBSERVED_ESTIMATED_COST_PER_IMAGE = 0.28 / 6.0
@@ -338,7 +338,7 @@ def load_prompt() -> str:
 
 
 def editing_agent() -> EditingAgent:
-    """Return the zero-API V4.0.3 rule-memory layer using stable app support."""
+    """Return the zero-API V4.0.4 rule-memory layer using stable app support."""
     return EditingAgent(USER_DATA_DIR)
 
 
@@ -359,13 +359,13 @@ def build_edit_instruction(base_prompt: str, input_file: Path) -> RuleSelection:
     return selection
 
 
-def normalize_quality_setting(value: Any, default: str = "low") -> str:
-    """Keep an existing explicit choice; never infer a more expensive quality."""
+def normalize_quality_setting(value: Any, default: str = "medium") -> str:
+    """Keep an explicit choice; normal production defaults to Medium."""
     candidate = str(value).strip().lower() if value is not None else ""
     return candidate if candidate in QUALITY_OPTIONS else default
 
 
-def normalize_quality_mode(value: Any, default: str = "low") -> str:
+def normalize_quality_mode(value: Any, default: str = "medium") -> str:
     """Normalize the UI mode without allowing the OpenAI API's Auto quality."""
     candidate = str(value).strip().lower() if value is not None else ""
     return candidate if candidate in QUALITY_MODES else default
@@ -594,8 +594,9 @@ def build_adaptive_addendum(metrics: dict[str, Any]) -> str:
         )
     elif mean > 0.62 or highlight_fraction > 0.16:
         lines.append(
-            "- This room is already bright. Protect white surfaces and window "
-            "highlights; do not add unnecessary exposure."
+            "- This room is already bright. Protect interior white surfaces and "
+            "window geometry, but still perform the mandatory exterior recovery "
+            "and sky treatment required by the production prompt."
         )
     else:
         lines.append(
@@ -2563,7 +2564,7 @@ def process_batch(
     client: OpenAI,
     *,
     selected_files: list[Path] | None = None,
-    quality: str = "low",
+    quality: str = "medium",
     cancel_requested=lambda: False,
     event=lambda kind, payload: None,
 ) -> BatchSummary:
@@ -2571,7 +2572,7 @@ def process_batch(
     if quality not in QUALITY_MODES:
         raise ValueError(f"Unsupported quality: {quality}")
     global QUALITY
-    QUALITY = quality if quality in QUALITY_OPTIONS else "low"
+    QUALITY = quality if quality in QUALITY_OPTIONS else "medium"
     batch_started = time.perf_counter()
     run_internal_regression_tests()
     for directory in (INPUT_DIR, OUTPUT_DIR, REVIEW_DIR, ERROR_DIR, LOG_DIR, DATA_DIR):
@@ -2865,7 +2866,7 @@ def append_demo_history(
 def process_demo_batch(
     *,
     selected_files: list[Path] | None = None,
-    quality: str = "low",
+    quality: str = "medium",
     result_mode: str = "All Pass",
     cancel_requested=lambda: False,
     event=lambda kind, payload: None,
@@ -2878,7 +2879,7 @@ def process_demo_batch(
         raise ValueError(f"Unsupported demo result mode: {result_mode}")
 
     global QUALITY
-    QUALITY = quality if quality in QUALITY_OPTIONS else "low"
+    QUALITY = quality if quality in QUALITY_OPTIONS else "medium"
     batch_started = time.perf_counter()
     for directory in (INPUT_DIR, OUTPUT_DIR, REVIEW_DIR, ERROR_DIR, LOG_DIR, DATA_DIR):
         directory.mkdir(parents=True, exist_ok=True)
@@ -3433,7 +3434,7 @@ def launch_gui() -> int:
 
         def __init__(self, parent=None):
             super().__init__(parent)
-            self.setWindowTitle("Editing Memory — MyEstatePics V4.0.3")
+            self.setWindowTitle("Editing Memory — MyEstatePics V4.0.4")
             self.resize(920, 480)
             layout = QVBoxLayout(self)
             explanation = QLabel(
@@ -3632,7 +3633,7 @@ def launch_gui() -> int:
             self.quality = QComboBox()
             self.quality.addItems(["SMART", "LOW", "MEDIUM", "HIGH"])
             saved_quality = normalize_quality_mode(
-                self.settings.value(QUALITY_SETTING, "smart"), "smart"
+                self.settings.value(QUALITY_SETTING, "medium"), "medium"
             )
             self.quality.setCurrentText(saved_quality.upper())
             self.demo_checkbox = QCheckBox("Demo Mode — No API Charges")
@@ -4123,7 +4124,7 @@ def launch_gui() -> int:
 
         def on_quality_changed(self, quality):
             global QUALITY
-            QUALITY = normalize_quality_mode(quality, "smart")
+            QUALITY = normalize_quality_mode(quality, "medium")
             _atomic_update_preferences(
                 self.preferences_path, {QUALITY_SETTING: QUALITY}
             )

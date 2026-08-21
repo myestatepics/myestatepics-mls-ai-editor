@@ -84,7 +84,7 @@ def test_mocked_end_to_end_preserves_filename_exif_and_quality_100(tmp_path, app
     class Images:
         def edit(self, **kwargs):
             assert kwargs["model"] == "gpt-image-2"
-            assert kwargs["quality"] == "low"
+            assert kwargs["quality"] == "medium"
             assert kwargs["output_format"] == "png"
             assert kwargs["prompt"].count("WINDOW FIDELITY — AUTHORITATIVE") == 1
             assert "Never convert an ordinary wall, door, opening, bright region" in kwargs["prompt"]
@@ -107,14 +107,14 @@ def test_mocked_end_to_end_preserves_filename_exif_and_quality_100(tmp_path, app
         assert result.getexif()[274] == 1
         assert result.getexif()[315] == "MyEstatePics"
     assert summary.total_tokens == 30
-    assert summary.quality == "low"
+    assert summary.quality == "medium"
     assert summary.images_processed == 1
     assert summary.elapsed_seconds >= 0
     assert summary.log_path and summary.log_path.exists()
     with summary.log_path.open(newline="", encoding="utf-8") as log_file:
         row = next(csv.DictReader(log_file))
     assert row["filename"] == source.name
-    assert row["quality"] == "low"
+    assert row["quality"] == "medium"
     assert float(row["processing_time_seconds"]) >= 0
     assert float(row["api_cost"]) > 0
     assert row["destination"] == str(app_module.OUTPUT_DIR)
@@ -129,7 +129,7 @@ def test_external_production_prompt_preserves_foundation_and_adds_fidelity_rules
     assert app_module.PROMPT_FILE == external_prompt
     loaded_prompt = app_module.load_prompt()
     assert loaded_prompt.startswith(
-        "MYESTATEPICS MLS INTERIOR — PRODUCTION PROMPT V4.0.3\n\n"
+        "MYESTATEPICS MLS INTERIOR — PRODUCTION PROMPT V4.0.4\n\n"
         "PHOTO CORRECTION ONLY"
     )
     assert "STRICTLY NEUTRAL WHITE BALANCE" in loaded_prompt
@@ -138,21 +138,21 @@ def test_external_production_prompt_preserves_foundation_and_adds_fidelity_rules
     assert "ARCHITECTURAL FIDELITY" in loaded_prompt
     assert "Mirror reflections must remain physically accurate" in loaded_prompt
     assert loaded_prompt.count("WINDOW FIDELITY — AUTHORITATIVE") == 1
-    assert "1. Deliver a professional MLS window pull" in loaded_prompt
-    assert "6. Cost selection is external to this prompt" in loaded_prompt
+    assert "1. Preserve exact architecture, materials, and geometry." in loaded_prompt
+    assert "EVERY GENUINE EXTERIOR-FACING WINDOW OR GLASS DOOR IS A MANDATORY CORRECTION" in loaded_prompt
     assert "Never invent architecture that does not exist." in loaded_prompt
     assert (
         "Never convert an ordinary wall, door, opening, bright region"
         in loaded_prompt
     )
-    assert "STRONG PROFESSIONAL MLS WINDOW PULL IS REQUIRED" in loaded_prompt
+    assert "The outdoor\nview must be immediately readable" in loaded_prompt
     assert "Through sheer curtains, blinds, screens" in loaded_prompt
-    assert "light, soft, natural, low-saturation daytime blue" in loaded_prompt
-    assert "featureless white sky is not an acceptable result" in loaded_prompt
-    assert "replace only that sky portion" in loaded_prompt
+    assert "Visible exterior sky must not remain featureless white" in loaded_prompt
+    assert "only those irrecoverably\nclipped sky pixels" in loaded_prompt
+    assert "white sky to remain" in loaded_prompt
     assert "Avoid deep blue," in loaded_prompt
     assert "royal blue, electric blue" in loaded_prompt
-    assert "cobalt blue, cyan-heavy blue, turquoise," in loaded_prompt
+    assert "cobalt blue, cyan-heavy\nblue, turquoise" in loaded_prompt
     assert "oversaturated blue" in loaded_prompt
     assert "WINDOW DETAIL" not in loaded_prompt
     assert "LIGHT-BLUE SKY THROUGH WINDOWS" not in loaded_prompt
@@ -162,6 +162,9 @@ def test_external_production_prompt_preserves_foundation_and_adds_fidelity_rules
     assert "inside a mirror, reflection, shower glass" in loaded_prompt
     assert "HARDWOOD FLOOR CONTINUITY" in loaded_prompt
     assert "WALL AND CEILING CONTINUITY" in loaded_prompt
+    assert "partial recovery is not sufficient" in loaded_prompt.lower()
+    assert "washout, or desaturation" in loaded_prompt
+    assert "photographer,\ncamera, tripod, phone" in loaded_prompt
     assert "Target a bright, natural, consistent MLS interior across rooms and angles." in loaded_prompt
     assert "global overexposure" in loaded_prompt
     assert "exposure\nbands" in loaded_prompt
@@ -215,7 +218,7 @@ def test_direct_images_edit_is_the_only_production_request(
     assert len(calls) == 1
     request = calls[0]
     assert request["model"] == "gpt-image-2"
-    assert request["quality"] == "low"
+    assert request["quality"] == "medium"
     assert request["size"] == "1536x1024"
     assert request["output_format"] == "png"
     assert "api_path=/v1/images/edits" in caplog.text
@@ -226,11 +229,11 @@ def test_direct_images_edit_is_the_only_production_request(
 
 
 def test_application_and_prompt_versions_are_independent(app_module):
-    assert app_module.PROGRAM_VERSION == "4.0.3"
+    assert app_module.PROGRAM_VERSION == "4.0.4"
     assert app_module.RELEASE_DATE == "2026-08-20"
-    assert app_module.PROMPT_VERSION == "V4.0.3"
-    assert app_module.DISPLAY_APPLICATION_NAME == "MyEstatePics AI Editor - Direct V4.0.3"
-    assert app_module.REVIEW_PDF_VERSION == "V4.0.3"
+    assert app_module.PROMPT_VERSION == "V4.0.4"
+    assert app_module.DISPLAY_APPLICATION_NAME == "MyEstatePics AI Editor - Direct V4.0.4"
+    assert app_module.REVIEW_PDF_VERSION == "V4.0.4"
 
 
 def test_v4_batch_uses_local_rules_without_an_additional_api_request(tmp_path, app_module):
@@ -335,8 +338,8 @@ def test_batch_review_pdfs_are_local_ordered_and_preserve_failed_position(
         inputs, outputs, "test-review-pdfs"
     )
 
-    assert before_pdf.name == "MyEstatePics_V4.0.3_BEFORE.pdf"
-    assert after_pdf.name == "MyEstatePics_V4.0.3_AFTER.pdf"
+    assert before_pdf.name == "MyEstatePics_V4.0.4_BEFORE.pdf"
+    assert after_pdf.name == "MyEstatePics_V4.0.4_AFTER.pdf"
     assert before_pdf.parent == after_pdf.parent
     assert before_pdf.read_bytes().startswith(b"%PDF")
     assert after_pdf.read_bytes().startswith(b"%PDF")
@@ -857,7 +860,7 @@ def test_paid_confirmation_summarizes_only_checked_images(app_module):
     assert "Quality: Medium" in text
     assert "Estimated cost: $0.32" in text
     assert "Demo Mode: Off" in text
-    assert "Prompt: MLS Production V4.0.3" in text
+    assert "Prompt: MLS Production V4.0.4" in text
 
 
 def test_retry_confirmation_queues_without_claiming_to_start(app_module):
@@ -874,12 +877,20 @@ def test_retry_confirmation_queues_without_claiming_to_start(app_module):
         ("low", "low"),
         ("MEDIUM", "medium"),
         ("HIGH", "high"),
-        ("auto", "low"),
-        (None, "low"),
+        ("auto", "medium"),
+        (None, "medium"),
     ],
 )
 def test_v3_quality_normalization_never_allows_auto(app_module, value, expected):
     assert app_module.normalize_quality_setting(value) == expected
+
+
+def test_medium_is_the_normal_production_default_and_all_manual_qualities_remain(app_module):
+    assert app_module.QUALITY == "medium"
+    assert app_module.normalize_quality_mode(None) == "medium"
+    assert app_module.normalize_quality_setting(None) == "medium"
+    assert app_module.QUALITY_OPTIONS == ("low", "medium", "high")
+    assert "auto" not in app_module.QUALITY_MODES
 
 
 @pytest.mark.parametrize(

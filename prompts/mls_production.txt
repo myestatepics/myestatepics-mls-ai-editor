@@ -1,4 +1,4 @@
-MYESTATEPICS MLS INTERIOR — PRODUCTION PROMPT V4.0.3
+MYESTATEPICS MLS INTERIOR — PRODUCTION PROMPT V4.0.4
 
 PHOTO CORRECTION ONLY
 
@@ -11,14 +11,14 @@ reflections, or exterior structures.
 
 PRIORITY ORDER
 
-1. Deliver a professional MLS window pull through genuine exterior-facing
-   windows and glass doors.
-2. Preserve exact material identity, color, and room geometry.
-3. Produce a bright natural MLS interior with useful shadow and midtone detail.
+1. Preserve exact architecture, materials, and geometry.
+2. For every genuine exterior-facing window or glass door, perform the
+   mandatory professional MLS window pull defined below.
+3. Keep the interior bright and natural with useful shadow and midtone detail.
 4. Correct only artificial low-frequency illumination inconsistency on large
-   continuous surfaces while retaining real light falloff and depth.
-5. Preserve architectural depth and a natural photographic look.
-6. Cost selection is external to this prompt and must never weaken items 1–5.
+   continuous surfaces while retaining real light falloff and room depth.
+5. Preserve a natural photographic look; secondary cosmetic correction never
+   weakens items 1–4.
 
 MATERIAL COLOR LOCK
 
@@ -27,8 +27,10 @@ cabinets, countertops, flooring, tile, stone, wood, carpet, rugs, furniture,
 fabric, and fixtures.
 
 Beige remains beige. Greige remains greige. Cream remains cream. Warm wood
-remains warm wood. Dark cabinets remain their photographed color. Do not
-whiten, gray, cool, warm, enrich, or desaturate materials.
+remains its photographed warm wood—not orange. Dark cabinets remain their
+photographed color. Do not turn gray into beige, beige into yellow, brown wood
+into orange, or neutral hardwood into saturated warm wood. Do not whiten, gray,
+cool, warm, enrich, or desaturate materials.
 
 STRICTLY NEUTRAL WHITE BALANCE
 
@@ -49,11 +51,18 @@ gray shadows, flat HDR tonality, haze, or synthetic rendering.
 
 WINDOW FIDELITY — AUTHORITATIVE
 
-STRONG PROFESSIONAL MLS WINDOW PULL IS REQUIRED for a real existing
-exterior-facing window or glass door. Recover the real exterior first: deliver
-clearly readable source-supported trees, landscaping, houses, buildings,
-ground, roads, fences, and structures with realistic photographic contrast,
-while preserving the identity and geometry of the actual exterior scene.
+EVERY GENUINE EXTERIOR-FACING WINDOW OR GLASS DOOR IS A MANDATORY CORRECTION
+REGION. Perform a strong professional MLS window pull. Recover the MAXIMUM
+REALISTIC exterior information visible through the original window. The outdoor
+view must be immediately readable, crisp, clear, and naturally contrasted—not
+faint, hazy, milky, foggy, washed out, nearly white, or barely visible.
+
+Where present in the source, clearly reveal genuine trees, landscaping, lawn,
+neighboring houses, buildings, roads, fences, exterior structures, ground, and
+natural outdoor detail. A viewer must immediately understand what is outside.
+Partial recovery is not sufficient: a white window, white sky, washed-out
+exterior, hazy exterior, faint trees, or barely visible landscaping is a failed
+MLS window pull.
 
 Never create, infer, or introduce a new window, opening, house, neighboring
 building, roof, garage, fence, vehicle, tree, road, structure, or exterior
@@ -64,27 +73,32 @@ window. Never invent exterior architecture merely to make a window pull look
 complete.
 
 Preserve all source-supported exterior objects, including houses, trees,
-landscaping, decks, fences, roads, driveways, vehicles, roofs, and window
-frames. If exterior architecture or objects are incomplete, clipped, hidden,
-blurred, or uncertain, enhance only what is supported by the source image; do
-not fabricate a plausible exterior scene.
+landscaping, decks, fences, roads, driveways, vehicles, roofs, ground, horizon,
+and window frames. Do not replace or invent houses, buildings, trees,
+landscaping, lawn, roads, fences, ground, horizon, exterior architecture, or a
+plausible different outdoor scene.
 
 Through sheer curtains, blinds, screens, or similar material, preserve the
 natural physical softness and partial obscuration. Do not create unnaturally
 crisp exterior detail or reconstruct hidden buildings or objects.
 
-Where real sky is visibly present through a real window, preserve or recover it
-as a light, soft, natural, low-saturation daytime blue with real clouds when
-recoverable. If the visible sky portion alone is irrecoverably clipped to
-featureless white, replace only that sky portion with the same restrained light
-natural MLS blue fallback; featureless white sky is not an acceptable result.
+Visible exterior sky must not remain featureless white, near-white, gray-white,
+washed out, or clipped-looking. First recover genuine sky information from the
+original photograph. If genuine sky is recoverable, preserve and enhance that
+real sky. If and only if the visible sky pixels alone are genuinely clipped and
+contain no recoverable sky information, replace only those irrecoverably
+clipped sky pixels with a light, natural, realistic MLS-blue sky. This approved
+fallback does not permit a white sky to remain.
+
 Apply blue only to actual sky pixels; never tint glass as a whole, buildings,
-trees, roofs, decks, fences, landscaping, window frames, curtains, blinds,
-reflections, or interior surfaces. Never use sky fallback to invent or alter
-exterior architecture, objects, horizon geometry, or scenery. Avoid deep blue,
-royal blue, electric blue, cobalt blue, cyan-heavy blue, turquoise,
-oversaturated blue, dramatic HDR blue, or artificial AI-looking sky. Factual
-exterior preservation has priority over aesthetic perfection.
+houses, trees, roofs, decks, fences, landscaping, lawn, ground, horizon, window
+frames, curtains, blinds, reflections, or interior surfaces. Never use sky
+fallback to invent or alter exterior architecture, objects, horizon geometry,
+or scenery. Avoid deep blue, royal blue, electric blue, cobalt blue, cyan-heavy
+blue, turquoise, oversaturated blue, dramatic HDR blue, or artificial
+AI-looking sky. Preserve clean window-frame, mullion, blind, curtain, glass,
+wall, and exterior geometry with no halos, glowing frames, blue bleed, fake
+masking edges, or manufactured visibility through opaque material.
 
 Never create a fake window, fake outdoor scenery, or fake reflection. Mirrors
 must continue to reflect the original room; never generate outdoor scenery
@@ -150,10 +164,11 @@ legitimate shadows, erase features, or manufacture texture.
 
 MIRROR AND PHOTOGRAPHY-EQUIPMENT REFLECTIONS
 
-If a real mirror or clear reflective surface visibly contains only a
-photographer, camera, tripod, phone, or obvious photography equipment,
-remove that photography-related reflection cleanly and reconstruct only the
-physically plausible reflected continuation already implied by the source.
+If a real mirror or clear reflective surface visibly contains a photographer,
+camera, tripod, phone, or obvious photography equipment, remove that
+photography-related reflection cleanly and reconstruct only the physically
+plausible reflected continuation already implied by the source. Do not alter
+the faces of legitimate people intentionally present in a property photograph.
 Do not change mirror size, position, frame, reflected room geometry, doors,
 windows, walls, furniture, architecture, or legitimate reflected objects.
 

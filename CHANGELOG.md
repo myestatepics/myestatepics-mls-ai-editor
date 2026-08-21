@@ -4,6 +4,21 @@ This file records the production architecture history relevant to the frozen
 Direct release. The older engineering timeline remains available in
 [`docs/CHANGELOG.md`](docs/CHANGELOG.md).
 
+## V4.0.4 window-pull recovery — 2026-08-20
+
+- New versioned application and installer name: `MyEstatePics AI Editor - Direct V4.0.4`.
+- Restores the historical direct-production requirement for a crisp, clear,
+  immediately readable exterior through every genuine exterior-facing window.
+  A white, washed-out, hazy, or barely visible window/sky is explicitly a
+  failed MLS window pull.
+- Keeps source-bound exterior objects and geometry protected while authorizing
+  a light natural MLS-blue fallback only for genuinely clipped sky pixels.
+- Makes Medium the normal production default. Low, Medium, and High remain
+  manual choices; High is never automatic and OpenAI Auto remains unavailable.
+- Retains the one-request Direct Images Edit workflow, local Premium Finish,
+  material-color protections, mirror-equipment cleanup, and all V4.0.3
+  engineering protections.
+
 ## V4.0.3 final production stabilization — 2026-08-20
 
 - New versioned application and installer name: `MyEstatePics AI Editor - Direct V4.0.3`.
