@@ -129,7 +129,7 @@ def test_external_production_prompt_preserves_foundation_and_adds_fidelity_rules
     assert app_module.PROMPT_FILE == external_prompt
     loaded_prompt = app_module.load_prompt()
     assert loaded_prompt.startswith(
-        "MYESTATEPICS MLS INTERIOR — PRODUCTION PROMPT V4.0.5\n\n"
+        "MYESTATEPICS MLS INTERIOR — PRODUCTION PROMPT V4.0.6\n\n"
         "PHOTO CORRECTION ONLY"
     )
     assert "STRICTLY NEUTRAL WHITE BALANCE" in loaded_prompt
@@ -147,14 +147,18 @@ def test_external_production_prompt_preserves_foundation_and_adds_fidelity_rules
     )
     assert "The outdoor\nview must be immediately readable" in loaded_prompt
     assert "Through sheer curtains, blinds, screens" in loaded_prompt
-    assert "Visible exterior sky must not remain featureless white" in loaded_prompt
-    assert "only those irrecoverably\nclipped sky pixels" in loaded_prompt
+    assert "Restrained never means white,\nnear-white, gray-white, colorless" in loaded_prompt
+    assert "If and only if visible sky pixels alone are genuinely clipped" in loaded_prompt
     assert "white sky to remain" in loaded_prompt
-    assert "pale, light, natural, low-saturation, low-contrast" in loaded_prompt
-    assert "visually subordinate to the property" in loaded_prompt
+    assert "recognizably\nlight natural MLS blue at normal MLS viewing size" in loaded_prompt
+    assert "barely perceptible blue that visually\nreads as white" in loaded_prompt
+    assert "moderate-to-low saturation" in loaded_prompt
+    assert "clearly blue enough\nto read as daytime sky" in loaded_prompt
+    assert "visually\nsubordinate to the property" in loaded_prompt
     assert "Do not generate dramatic or clearly defined fallback clouds" in loaded_prompt
     assert "fallback sky is viewed through blinds" in loaded_prompt
     assert "reduce\nsky saturation and contrast" in loaded_prompt
+    assert "still visibly read as light\nnatural blue" in loaded_prompt
     assert "Avoid deep blue," in loaded_prompt
     assert "royal blue, electric blue" in loaded_prompt
     assert "cobalt blue, cyan-heavy\nblue, turquoise" in loaded_prompt
@@ -234,11 +238,11 @@ def test_direct_images_edit_is_the_only_production_request(
 
 
 def test_application_and_prompt_versions_are_independent(app_module):
-    assert app_module.PROGRAM_VERSION == "4.0.5"
-    assert app_module.RELEASE_DATE == "2026-08-20"
-    assert app_module.PROMPT_VERSION == "V4.0.5"
-    assert app_module.DISPLAY_APPLICATION_NAME == "MyEstatePics AI Editor - Direct V4.0.5"
-    assert app_module.REVIEW_PDF_VERSION == "V4.0.5"
+    assert app_module.PROGRAM_VERSION == "4.0.6"
+    assert app_module.RELEASE_DATE == "2026-08-21"
+    assert app_module.PROMPT_VERSION == "V4.0.6"
+    assert app_module.DISPLAY_APPLICATION_NAME == "MyEstatePics AI Editor - Direct V4.0.6"
+    assert app_module.REVIEW_PDF_VERSION == "V4.0.6"
 
 
 def test_v4_batch_uses_local_rules_without_an_additional_api_request(tmp_path, app_module):
@@ -343,8 +347,8 @@ def test_batch_review_pdfs_are_local_ordered_and_preserve_failed_position(
         inputs, outputs, "test-review-pdfs"
     )
 
-    assert before_pdf.name == "MyEstatePics_V4.0.5_BEFORE.pdf"
-    assert after_pdf.name == "MyEstatePics_V4.0.5_AFTER.pdf"
+    assert before_pdf.name == "MyEstatePics_V4.0.6_BEFORE.pdf"
+    assert after_pdf.name == "MyEstatePics_V4.0.6_AFTER.pdf"
     assert before_pdf.parent == after_pdf.parent
     assert before_pdf.read_bytes().startswith(b"%PDF")
     assert after_pdf.read_bytes().startswith(b"%PDF")
@@ -865,7 +869,7 @@ def test_paid_confirmation_summarizes_only_checked_images(app_module):
     assert "Quality: Medium" in text
     assert "Estimated cost: $0.32" in text
     assert "Demo Mode: Off" in text
-    assert "Prompt: MLS Production V4.0.5" in text
+    assert "Prompt: MLS Production V4.0.6" in text
 
 
 def test_retry_confirmation_queues_without_claiming_to_start(app_module):

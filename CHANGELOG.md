@@ -4,6 +4,18 @@ This file records the production architecture history relevant to the frozen
 Direct release. The older engineering timeline remains available in
 [`docs/CHANGELOG.md`](docs/CHANGELOG.md).
 
+## V4.0.6 final bounded MLS window standard — 2026-08-21
+
+- New versioned application and installer name: `MyEstatePics AI Editor - Direct V4.0.6`.
+- Retains V4.0.5’s mandatory source-supported exterior recovery and sky realism
+  ceiling, while adding a minimum visible-blue floor: daytime sky must read as
+  recognizably light natural MLS blue at normal viewing size.
+- Makes white, near-white, gray-white, colorless, and barely perceptible blue
+  sky explicit failures, including through blinds or other real coverings.
+- Reaffirms hard removal of photography-equipment reflections and preserves
+  Medium default, the one-request Direct Images Edit workflow, local Premium
+  Finish, and all V4.0.5 engineering protections.
+
 ## V4.0.5 fallback-sky realism ceiling — 2026-08-20
 
 - New versioned application and installer name: `MyEstatePics AI Editor - Direct V4.0.5`.
