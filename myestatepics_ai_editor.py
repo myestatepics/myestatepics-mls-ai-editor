@@ -1,5 +1,5 @@
 """
-MyEstatePics MLS Interior Batch Editor — Direct V4.0
+MyEstatePics MLS Interior Batch Editor — Direct V5.0
 
 Workflow:
     Incoming/*.jpg or *.jpeg
@@ -60,8 +60,8 @@ from reportlab.pdfgen import canvas
 DEFAULT_APPLICATION_NAME = "MyEstatePics AI Editor"
 DIRECT_TEST_APPLICATION_NAME = "MyEstatePics AI Editor - Direct"
 # The bundle/Finder name is versioned, but this identity deliberately remains
-# stable so V4.0 reuses the established Direct Application Support settings.
-DISPLAY_APPLICATION_NAME = "MyEstatePics AI Editor - Direct V4.0"
+# stable so V5.0 reuses the established Direct Application Support settings.
+DISPLAY_APPLICATION_NAME = "MyEstatePics AI Editor - Direct V5.0"
 APPLICATION_NAME = os.environ.get(
     "MYESTATEPICS_APPLICATION_NAME", DEFAULT_APPLICATION_NAME
 )
@@ -147,8 +147,8 @@ PROMPT_FILE = resource_path("prompts/mls_production.txt")
 LEARNED_RULES_FILE = USER_DATA_DIR / "learned_rules.json"
 FEEDBACK_HISTORY_FILE = USER_DATA_DIR / "feedback_history.jsonl"
 
-PROGRAM_VERSION = "4.0"
-PROMPT_VERSION = "V3.1.1"
+PROGRAM_VERSION = "5.0"
+PROMPT_VERSION = "V5.0"
 MODEL = "gpt-image-2"
 QUALITY = "low"
 QUALITY_OPTIONS = ("low", "medium", "high")
@@ -160,7 +160,7 @@ SQUARE_SIZE = "1024x1024"
 IMAGES_EDIT_API_PATH = "/v1/images/edits"
 API_OUTPUT_FORMAT = "png"
 JPEG_OUTPUT_QUALITY = 100
-REVIEW_PDF_VERSION = "V4.0"
+REVIEW_PDF_VERSION = "V5.0"
 REVIEW_PDF_MAX_IMAGE_EDGE = 1200
 DPI = (300, 300)
 OBSERVED_ESTIMATED_COST_PER_IMAGE = 0.28 / 6.0
@@ -328,7 +328,7 @@ def load_prompt() -> str:
 
 
 def editing_agent() -> EditingAgent:
-    """Return the zero-API V4.0 rule-memory layer using stable app support."""
+    """Return the zero-API V5.0 rule-memory layer using stable app support."""
     return EditingAgent(USER_DATA_DIR)
 
 
@@ -3125,7 +3125,7 @@ def launch_gui() -> int:
 
         def __init__(self, parent=None):
             super().__init__(parent)
-            self.setWindowTitle("Editing Memory — MyEstatePics V4.0")
+            self.setWindowTitle("Editing Memory — MyEstatePics V5.0")
             self.resize(920, 480)
             layout = QVBoxLayout(self)
             explanation = QLabel(

@@ -173,12 +173,14 @@ photographed region unchanged.
 
 HARDWOOD FLOOR CONTINUITY
 
-Treat one continuous hardwood floor as one photographed material. Preserve its
-exact original wood color, grain, plank pattern, plank geometry, directional
-light, and legitimate reflections. Correct only localized excessive highlight,
-washed-out exposure, color contamination, or white-balance inconsistency so
-the same floor reads naturally as one continuous surface. Never recolor,
-replace, flatten, invent grain, erase real grain, or alter plank geometry.
+Preserve V4.0 hardwood exactly as the default behavior. When a continuous
+hardwood surface contains an abnormally intense window-driven glare region that
+becomes visually dominant, reduce only the excessive highlight intensity and
+blend it naturally into the surrounding floor. Preserve the original wood
+color, grain, plank boundaries, texture, natural sheen, directional daylight,
+soft reflections, and photographic depth. Do not flatten the floor, recolor
+the wood, remove all reflection, create artificial uniformity, or modify
+unaffected hardwood.
 
 WALL AND CEILING CONTINUITY
 

@@ -4,6 +4,20 @@ This file records the production architecture history relevant to the frozen
 Direct release. The older engineering timeline remains available in
 [`docs/CHANGELOG.md`](docs/CHANGELOG.md).
 
+## V5.0 one-chance production candidate
+
+- Starts directly from the approved V4.0 golden source commit
+  `e3f6d850cec7091149536f2a6b47236053afdc95`; no later V4.0.x code or prompt
+  sections are incorporated.
+- Retains the V4.0 direct Images Edit workflow, window pull, sky behavior,
+  material behavior, exposure, editing memory, and local finishing unchanged.
+- Makes one surgical clarification in `HARDWOOD FLOOR CONTINUITY`: only an
+  abnormally dominant, window-driven hardwood glare region may be reduced,
+  while the floor's color, grain, planks, sheen, reflections, daylight, and
+  unaffected areas remain protected.
+- Requires a user-run, four-image visual comparison against V4.0 before any
+  production promotion. No paid API calls are made during V5.0 development.
+
 ## V4.0 local editing agent
 
 - New versioned application name: `MyEstatePics AI Editor - Direct V4.0`.

@@ -157,25 +157,47 @@ def test_external_production_prompt_preserves_foundation_and_adds_fidelity_rules
     assert "outdoor scenery inside a mirror" in loaded_prompt
     assert "HARDWOOD FLOOR CONTINUITY" in loaded_prompt
     assert "WALL AND CEILING CONTINUITY" in loaded_prompt
-    assert "MIRROR AND PHOTOGRAPHY-EQUIPMENT REFLECTIONS" in loaded_prompt
-    assert "LOCAL MATERIAL HIGHLIGHT PROTECTION" in loaded_prompt
-    assert "Do not globally darken the photograph" in loaded_prompt
-    assert "preserve the real directional light and natural transition into shade" in loaded_prompt
-    assert "Never remove legitimate sunlight" in loaded_prompt
-    assert "original paint color" in loaded_prompt
-    assert "subtle natural illumination gradient" in loaded_prompt
-    assert "Do not add clarity, sharpening, microcontrast" in loaded_prompt
-    assert "V3.1 RESTRAINED NATURAL WINDOW SKY" in loaded_prompt
-    assert "A subtle, light, naturally" in loaded_prompt
-    assert "Avoid royal blue, electric blue, deep blue" in loaded_prompt
-    assert "Never create a dramatic AI sky" in loaded_prompt
-    assert "Keep the existing strong window pull" in loaded_prompt
-    assert "V3.1.1 WINDOW / EXTERIOR FACTUAL FIDELITY" in loaded_prompt
-    assert "Never reconstruct, infer, complete, replace, imagine, or invent exterior" in loaded_prompt
-    assert "An imperfect window is always preferable to" in loaded_prompt
-    assert "mild cloud visibility is permitted only where the corresponding sky pixels" in loaded_prompt
-    assert "HARDWOOD FLOOR CONTINUITY" in loaded_prompt
-    assert "WALL AND CEILING CONTINUITY" in loaded_prompt
+
+
+def test_v5_hardwood_glare_clarification_is_narrow_and_preserves_v4_window_rules(
+    app_module,
+):
+    prompt = app_module.load_prompt()
+    section = prompt.split("HARDWOOD FLOOR CONTINUITY\n\n", 1)[1].split(
+        "\n\nWALL AND CEILING CONTINUITY", 1
+    )[0]
+    assert section == (
+        "Preserve V4.0 hardwood exactly as the default behavior. When a continuous\n"
+        "hardwood surface contains an abnormally intense window-driven glare region that\n"
+        "becomes visually dominant, reduce only the excessive highlight intensity and\n"
+        "blend it naturally into the surrounding floor. Preserve the original wood\n"
+        "color, grain, plank boundaries, texture, natural sheen, directional daylight,\n"
+        "soft reflections, and photographic depth. Do not flatten the floor, recolor\n"
+        "the wood, remove all reflection, create artificial uniformity, or modify\n"
+        "unaffected hardwood."
+    )
+    assert "WINDOW PULL\n\nFor an existing confirmed window" in prompt
+    assert "SKY ADJUSTMENT — EXISTING WINDOWS ONLY" in prompt
+    assert "Keep every real exterior object unchanged" in prompt
+    assert "MIRROR AND PHOTOGRAPHY-EQUIPMENT REFLECTIONS" in prompt
+    assert "LOCAL MATERIAL HIGHLIGHT PROTECTION" in prompt
+    assert "Do not globally darken the photograph" in prompt
+    assert "preserve the real directional light and natural transition into shade" in prompt
+    assert "Never remove legitimate sunlight" in prompt
+    assert "original paint color" in prompt
+    assert "subtle natural illumination gradient" in prompt
+    assert "Do not add clarity, sharpening, microcontrast" in prompt
+    assert "V3.1 RESTRAINED NATURAL WINDOW SKY" in prompt
+    assert "A subtle, light, naturally" in prompt
+    assert "Avoid royal blue, electric blue, deep blue" in prompt
+    assert "Never create a dramatic AI sky" in prompt
+    assert "Keep the existing strong window pull" in prompt
+    assert "V3.1.1 WINDOW / EXTERIOR FACTUAL FIDELITY" in prompt
+    assert "Never reconstruct, infer, complete, replace, imagine, or invent exterior" in prompt
+    assert "An imperfect window is always preferable to" in prompt
+    assert "mild cloud visibility is permitted only where the corresponding sky pixels" in prompt
+    assert "HARDWOOD FLOOR CONTINUITY" in prompt
+    assert "WALL AND CEILING CONTINUITY" in prompt
 
 
 def test_direct_images_edit_is_the_only_production_request(
@@ -227,10 +249,10 @@ def test_direct_images_edit_is_the_only_production_request(
 
 
 def test_application_and_prompt_versions_are_independent(app_module):
-    assert app_module.PROGRAM_VERSION == "4.0"
-    assert app_module.PROMPT_VERSION == "V3.1.1"
-    assert app_module.DISPLAY_APPLICATION_NAME == "MyEstatePics AI Editor - Direct V4.0"
-    assert app_module.REVIEW_PDF_VERSION == "V4.0"
+    assert app_module.PROGRAM_VERSION == "5.0"
+    assert app_module.PROMPT_VERSION == "V5.0"
+    assert app_module.DISPLAY_APPLICATION_NAME == "MyEstatePics AI Editor - Direct V5.0"
+    assert app_module.REVIEW_PDF_VERSION == "V5.0"
 
 
 def test_v4_batch_uses_local_rules_without_an_additional_api_request(tmp_path, app_module):
@@ -334,8 +356,8 @@ def test_batch_review_pdfs_are_local_ordered_and_preserve_failed_position(
         inputs, outputs, "test-review-pdfs"
     )
 
-    assert before_pdf.name == "MyEstatePics_V4.0_BEFORE.pdf"
-    assert after_pdf.name == "MyEstatePics_V4.0_AFTER.pdf"
+    assert before_pdf.name == "MyEstatePics_V5.0_BEFORE.pdf"
+    assert after_pdf.name == "MyEstatePics_V5.0_AFTER.pdf"
     assert before_pdf.parent == after_pdf.parent
     assert before_pdf.read_bytes().startswith(b"%PDF")
     assert after_pdf.read_bytes().startswith(b"%PDF")
@@ -666,7 +688,7 @@ def test_paid_confirmation_summarizes_only_checked_images(app_module):
     assert "Quality: Medium" in text
     assert "Estimated cost: $0.32" in text
     assert "Demo Mode: Off" in text
-    assert "Prompt: MLS Production V3" in text
+    assert "Prompt: MLS Production V5.0" in text
 
 
 def test_retry_confirmation_queues_without_claiming_to_start(app_module):
