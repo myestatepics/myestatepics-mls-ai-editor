@@ -1,4 +1,4 @@
-MYESTATEPICS MLS INTERIOR — PRODUCTION PROMPT V4.0.4
+MYESTATEPICS MLS INTERIOR — PRODUCTION PROMPT V4.0.5
 
 PHOTO CORRECTION ONLY
 
@@ -82,23 +82,39 @@ Through sheer curtains, blinds, screens, or similar material, preserve the
 natural physical softness and partial obscuration. Do not create unnaturally
 crisp exterior detail or reconstruct hidden buildings or objects.
 
+When fallback sky is viewed through blinds, sheer or translucent curtains,
+screens, or partially closed coverings, apply extra optical restraint: reduce
+sky saturation and contrast, use minimal or no cloud definition, retain the
+actual covering texture and boundaries, and do not make the covering
+artificially transparent. Exterior detail must remain believable through the
+obstruction, not vivid, crisp, or high-contrast behind it.
+
 Visible exterior sky must not remain featureless white, near-white, gray-white,
 washed out, or clipped-looking. First recover genuine sky information from the
 original photograph. If genuine sky is recoverable, preserve and enhance that
 real sky. If and only if the visible sky pixels alone are genuinely clipped and
 contain no recoverable sky information, replace only those irrecoverably
-clipped sky pixels with a light, natural, realistic MLS-blue sky. This approved
-fallback does not permit a white sky to remain.
+clipped sky pixels with a pale, light, natural, low-saturation, low-contrast,
+photographically plausible MLS-blue fallback. The fallback sky must remain
+visually subordinate to the property, trees, buildings, and landscape, and
+consistent with the existing daylight. This approved fallback does not permit a
+white sky to remain.
+
+Do not generate dramatic or clearly defined fallback clouds. If cloud texture
+is needed, it must be extremely soft, faint, low contrast, naturally
+integrated, and barely noticeable; a simple pale natural-blue gradient is
+preferable to an obvious synthetic cloudscape.
 
 Apply blue only to actual sky pixels; never tint glass as a whole, buildings,
 houses, trees, roofs, decks, fences, landscaping, lawn, ground, horizon, window
 frames, curtains, blinds, reflections, or interior surfaces. Never use sky
 fallback to invent or alter exterior architecture, objects, horizon geometry,
 or scenery. Avoid deep blue, royal blue, electric blue, cobalt blue, cyan-heavy
-blue, turquoise, oversaturated blue, dramatic HDR blue, or artificial
-AI-looking sky. Preserve clean window-frame, mullion, blind, curtain, glass,
-wall, and exterior geometry with no halos, glowing frames, blue bleed, fake
-masking edges, or manufactured visibility through opaque material.
+blue, turquoise, oversaturated blue, dramatic, cinematic, HDR-like,
+attention-grabbing, stylized, postcard-like, or artificial AI-looking sky.
+Preserve clean window-frame, mullion, blind, curtain, glass, wall, and exterior
+geometry with no halos, glowing frames, blue bleed, fake masking edges, or
+manufactured visibility through opaque material.
 
 Never create a fake window, fake outdoor scenery, or fake reflection. Mirrors
 must continue to reflect the original room; never generate outdoor scenery

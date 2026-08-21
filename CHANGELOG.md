@@ -4,6 +4,17 @@ This file records the production architecture history relevant to the frozen
 Direct release. The older engineering timeline remains available in
 [`docs/CHANGELOG.md`](docs/CHANGELOG.md).
 
+## V4.0.5 fallback-sky realism ceiling — 2026-08-20
+
+- New versioned application and installer name: `MyEstatePics AI Editor - Direct V4.0.5`.
+- Retains V4.0.4 mandatory exterior recovery while limiting fallback sky to a
+  pale, low-saturation, low-contrast, photorealistic result subordinate to the
+  property and exterior view.
+- Adds extra fallback-sky restraint behind blinds, sheers, screens, and partial
+  coverings, and prohibits prominent or dramatic fallback clouds.
+- Retains Medium as the normal production default, the one-request Direct
+  Images Edit workflow, local Premium Finish, and all V4.0.4 protections.
+
 ## V4.0.4 window-pull recovery — 2026-08-20
 
 - New versioned application and installer name: `MyEstatePics AI Editor - Direct V4.0.4`.
