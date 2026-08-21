@@ -129,7 +129,7 @@ def test_external_production_prompt_preserves_foundation_and_adds_fidelity_rules
     assert app_module.PROMPT_FILE == external_prompt
     loaded_prompt = app_module.load_prompt()
     assert loaded_prompt.startswith(
-        "MYESTATEPICS MLS INTERIOR — PRODUCTION PROMPT V4.0.6\n\n"
+        "MYESTATEPICS MLS INTERIOR — PRODUCTION PROMPT V4.0.7\n\n"
         "PHOTO CORRECTION ONLY"
     )
     assert "STRICTLY NEUTRAL WHITE BALANCE" in loaded_prompt
@@ -170,6 +170,12 @@ def test_external_production_prompt_preserves_foundation_and_adds_fidelity_rules
     assert "Never create a fake window" in loaded_prompt
     assert "inside a mirror, reflection, shower glass" in loaded_prompt
     assert "HARDWOOD FLOOR CONTINUITY" in loaded_prompt
+    assert "Correct only localized excessive window-driven glare" in loaded_prompt
+    assert "blown reflective streaks" in loaded_prompt
+    assert "white or yellow floor flare" in loaded_prompt
+    assert "Compress excessive highlight intensity" in loaded_prompt
+    assert "Do not remove all reflection, flatten the whole\nfloor" in loaded_prompt
+    assert "Transitions must be broad, smooth,\ngradual, and physically believable" in loaded_prompt
     assert "WALL AND CEILING CONTINUITY" in loaded_prompt
     assert "partial recovery is not sufficient" in loaded_prompt.lower()
     assert "washout, or desaturation" in loaded_prompt
@@ -238,11 +244,11 @@ def test_direct_images_edit_is_the_only_production_request(
 
 
 def test_application_and_prompt_versions_are_independent(app_module):
-    assert app_module.PROGRAM_VERSION == "4.0.6"
+    assert app_module.PROGRAM_VERSION == "4.0.7"
     assert app_module.RELEASE_DATE == "2026-08-21"
-    assert app_module.PROMPT_VERSION == "V4.0.6"
-    assert app_module.DISPLAY_APPLICATION_NAME == "MyEstatePics AI Editor - Direct V4.0.6"
-    assert app_module.REVIEW_PDF_VERSION == "V4.0.6"
+    assert app_module.PROMPT_VERSION == "V4.0.7"
+    assert app_module.DISPLAY_APPLICATION_NAME == "MyEstatePics AI Editor - Direct V4.0.7"
+    assert app_module.REVIEW_PDF_VERSION == "V4.0.7"
 
 
 def test_v4_batch_uses_local_rules_without_an_additional_api_request(tmp_path, app_module):
@@ -347,8 +353,8 @@ def test_batch_review_pdfs_are_local_ordered_and_preserve_failed_position(
         inputs, outputs, "test-review-pdfs"
     )
 
-    assert before_pdf.name == "MyEstatePics_V4.0.6_BEFORE.pdf"
-    assert after_pdf.name == "MyEstatePics_V4.0.6_AFTER.pdf"
+    assert before_pdf.name == "MyEstatePics_V4.0.7_BEFORE.pdf"
+    assert after_pdf.name == "MyEstatePics_V4.0.7_AFTER.pdf"
     assert before_pdf.parent == after_pdf.parent
     assert before_pdf.read_bytes().startswith(b"%PDF")
     assert after_pdf.read_bytes().startswith(b"%PDF")
@@ -869,7 +875,7 @@ def test_paid_confirmation_summarizes_only_checked_images(app_module):
     assert "Quality: Medium" in text
     assert "Estimated cost: $0.32" in text
     assert "Demo Mode: Off" in text
-    assert "Prompt: MLS Production V4.0.6" in text
+    assert "Prompt: MLS Production V4.0.7" in text
 
 
 def test_retry_confirmation_queues_without_claiming_to_start(app_module):

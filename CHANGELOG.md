@@ -4,6 +4,15 @@ This file records the production architecture history relevant to the frozen
 Direct release. The older engineering timeline remains available in
 [`docs/CHANGELOG.md`](docs/CHANGELOG.md).
 
+## V4.0.7 hardwood glare normalization — 2026-08-21
+
+- New versioned application and installer name: `MyEstatePics AI Editor - Direct V4.0.7`.
+- Adds a local hardwood exposure-continuity instruction: retain grain, plank
+  geometry, directional daylight, and soft reflection while compressing
+  excessive window-driven flare, bright bands, and white/yellow hotspots.
+- Retains the V4.0.6 window, sky, brightness, material, reflection, Smart,
+  one-request, and local Premium Finish behavior unchanged.
+
 ## V4.0.6 final bounded MLS window standard — 2026-08-21
 
 - New versioned application and installer name: `MyEstatePics AI Editor - Direct V4.0.6`.

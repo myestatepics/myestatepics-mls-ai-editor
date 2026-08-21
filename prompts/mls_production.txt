@@ -1,4 +1,4 @@
-MYESTATEPICS MLS INTERIOR — PRODUCTION PROMPT V4.0.6
+MYESTATEPICS MLS INTERIOR — PRODUCTION PROMPT V4.0.7
 
 PHOTO CORRECTION ONLY
 
@@ -169,10 +169,20 @@ HARDWOOD FLOOR CONTINUITY
 
 Treat one continuous hardwood floor as one photographed material. Preserve its
 exact original wood color, grain, plank pattern, plank geometry, directional
-light, and legitimate reflections. Correct only localized excessive highlight,
-washed-out exposure, color contamination, or white-balance inconsistency so
-the same floor reads naturally as one continuous surface. Never recolor,
-replace, flatten, invent grain, erase real grain, or alter plank geometry.
+light, natural tonal variation, legitimate soft reflections, and natural sheen.
+Correct only localized excessive window-driven glare: blown reflective streaks,
+white or yellow floor flare, harsh exposure bands, distracting bright strips,
+isolated hotspots, and artificial exposure discontinuities that make the same
+continuous hardwood substantially brighter than surrounding floor.
+
+Compress excessive highlight intensity toward the underlying hardwood color
+family while retaining believable directional daylight and the general footprint
+of legitimate soft reflection. Do not remove all reflection, flatten the whole
+floor, globally darken the room, create a local patch, smear texture, repeat
+grain, or leave visible mask boundaries. Transitions must be broad, smooth,
+gradual, and physically believable. Never recolor, replace, invent grain,
+erase real grain, alter plank geometry, turn dark brown light brown, brown
+orange/yellow, dark wood gray, or natural wood into synthetic brown.
 
 WALL AND CEILING CONTINUITY
 
