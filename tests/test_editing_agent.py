@@ -15,27 +15,31 @@ def test_missing_database_seeds_approved_rules_and_never_uses_api(tmp_path):
 
     assert agent.rules_path.exists()
     assert "GLOBAL_MATERIALS_001" in selection.applied_rule_ids
-    assert "WINDOW_IDENTITY_001" in selection.applied_rule_ids
+    assert "WINDOW" not in selection.context_categories
+    assert not any("WINDOW" in rule_id or "SKY" in rule_id for rule_id in selection.applied_rule_ids)
     assert "APPROVED LOCAL EDITING LESSONS" in selection.instruction
     assert not hasattr(agent, "client")
     assert not hasattr(agent, "images")
 
 
-def test_only_approved_enabled_and_relevant_rules_are_appended(tmp_path):
+def test_filename_terms_cannot_activate_window_or_sky_rules(tmp_path):
     agent = EditingAgent(tmp_path)
     rules = [
         LearnedRule("GLOBAL_OK_001", ("GLOBAL",), "Global", "Keep materials faithful.", "APPROVED"),
-        LearnedRule("WINDOW_OK_001", ("WINDOW",), "Window", "Preserve exterior identity.", "APPROVED"),
         LearnedRule("PROPOSED_001", ("GLOBAL",), "Proposed", "Do not apply.", "PROPOSED"),
         LearnedRule("DISABLED_001", ("GLOBAL",), "Disabled", "Do not apply.", "DISABLED", False),
     ]
     agent._save_rules(rules)
 
     generic = agent.build_instruction(MASTER, Path("room.jpg"))
-    window = agent.build_instruction(MASTER, Path("Kitchen Window.jpg"))
+    window = agent.build_instruction(
+        MASTER, Path("Kitchen window sliding patio patio door glass door.jpg")
+    )
 
     assert generic.applied_rule_ids == ("GLOBAL_OK_001",)
-    assert window.applied_rule_ids == ("GLOBAL_OK_001", "WINDOW_OK_001")
+    assert window.applied_rule_ids == ("GLOBAL_OK_001",)
+    assert "WINDOW" not in window.context_categories
+    assert "SKY" not in window.context_categories
     assert "PROPOSED_001" not in window.instruction
     assert "DISABLED_001" not in window.instruction
 

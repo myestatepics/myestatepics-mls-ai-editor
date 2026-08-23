@@ -90,7 +90,9 @@ def test_mocked_end_to_end_preserves_filename_exif_and_quality_100(tmp_path, app
                 in kwargs["prompt"]
             )
             assert "Never treat mirrors, shower glass, reflections" in kwargs["prompt"]
-            assert "Never create a window." in kwargs["prompt"]
+            assert "Preserve the window exactly as supplied." in kwargs["prompt"]
+            assert "Do not add blue sky, grass," in kwargs["prompt"]
+            assert "trees, houses, roads, landscaping" in kwargs["prompt"]
             return response
 
     summary = app_module.process_batch(SimpleNamespace(images=Images()))
@@ -146,20 +148,19 @@ def test_external_production_prompt_preserves_foundation_and_adds_fidelity_rules
         in loaded_prompt
     )
     assert "Never treat mirrors, shower glass, reflections" in loaded_prompt
-    assert "Never create blue sky unless editing an existing" in loaded_prompt
-    assert "leave that region unchanged" in loaded_prompt
-    assert "strong, natural MLS-quality window pull" in loaded_prompt
-    assert "Only when identifiable sky pixels genuinely exist" in loaded_prompt
-    assert "Preserve every real exterior object" in loaded_prompt
-    assert "Do not allow blue to bleed" in loaded_prompt
-    assert "complete exterior view." in loaded_prompt
+    assert "WINDOW FIDELITY — PRESERVE SOURCE ONLY" in loaded_prompt
+    assert "Preserve the window exactly as supplied." in loaded_prompt
+    assert "If the window is white or\nblown out, leave it naturally bright and neutral." in loaded_prompt
+    assert "V5.1 CAPABILITY BOUNDARY" in loaded_prompt
+    assert "V5.1 performs interior enhancement only." in loaded_prompt
+    assert "It does not perform authentic window\npulls." in loaded_prompt
     assert "Never create a fake window" in loaded_prompt
     assert "outdoor scenery inside a mirror" in loaded_prompt
     assert "HARDWOOD FLOOR CONTINUITY" in loaded_prompt
     assert "WALL AND CEILING CONTINUITY" in loaded_prompt
 
 
-def test_v5_hardwood_glare_clarification_is_narrow_and_preserves_v4_window_rules(
+def test_v51_hardwood_glare_clarification_and_window_containment_are_preserved(
     app_module,
 ):
     prompt = app_module.load_prompt()
@@ -176,9 +177,11 @@ def test_v5_hardwood_glare_clarification_is_narrow_and_preserves_v4_window_rules
         "the wood, remove all reflection, create artificial uniformity, or modify\n"
         "unaffected hardwood."
     )
-    assert "WINDOW PULL\n\nFor an existing confirmed window" in prompt
-    assert "SKY ADJUSTMENT — EXISTING WINDOWS ONLY" in prompt
-    assert "Keep every real exterior object unchanged" in prompt
+    assert "WINDOW PULL" not in prompt
+    assert "LIGHT-BLUE SKY THROUGH WINDOWS" not in prompt
+    assert "soft natural light blue" not in prompt.casefold()
+    assert "Recover crisp, realistic exterior detail" not in prompt
+    assert "replace unresolved window content" not in prompt
     assert "MIRROR AND PHOTOGRAPHY-EQUIPMENT REFLECTIONS" in prompt
     assert "LOCAL MATERIAL HIGHLIGHT PROTECTION" in prompt
     assert "Do not globally darken the photograph" in prompt
@@ -187,17 +190,31 @@ def test_v5_hardwood_glare_clarification_is_narrow_and_preserves_v4_window_rules
     assert "original paint color" in prompt
     assert "subtle natural illumination gradient" in prompt
     assert "Do not add clarity, sharpening, microcontrast" in prompt
-    assert "V3.1 RESTRAINED NATURAL WINDOW SKY" in prompt
-    assert "A subtle, light, naturally" in prompt
-    assert "Avoid royal blue, electric blue, deep blue" in prompt
-    assert "Never create a dramatic AI sky" in prompt
-    assert "Keep the existing strong window pull" in prompt
-    assert "V3.1.1 WINDOW / EXTERIOR FACTUAL FIDELITY" in prompt
-    assert "Never reconstruct, infer, complete, replace, imagine, or invent exterior" in prompt
-    assert "An imperfect window is always preferable to" in prompt
-    assert "mild cloud visibility is permitted only where the corresponding sky pixels" in prompt
     assert "HARDWOOD FLOOR CONTINUITY" in prompt
     assert "WALL AND CEILING CONTINUITY" in prompt
+
+
+def test_v51_adaptive_prompt_never_requests_window_or_sky_generation(app_module):
+    prompt = app_module.build_adaptive_addendum(
+        {"mean": 0.30, "contrast_span": 0.80, "shadow_fraction": 0.35,
+         "highlight_fraction": 0.20, "wb": {"instruction": ""}}
+    )
+    assert "sky" not in prompt.casefold()
+    assert "window" not in prompt.casefold()
+    assert "exterior" not in prompt.casefold()
+
+
+def test_v51_bright_source_colorization_is_reviewed_not_reported_as_window_recovery(
+    tmp_path, app_module
+):
+    source = tmp_path / "source.jpg"
+    source_image = Image.new("RGB", (120, 80), (245, 245, 245))
+    source_image.save(source)
+    output = Image.new("RGB", (120, 80), (30, 110, 255))
+    result = app_module.compare_images(source, output, sharpened=False)
+    assert result.status in {"REVIEW", "FAIL"}
+    assert any("Possible generated blue/green content" in message for message in result.messages)
+    assert not any("window pull was completed" in message.casefold() for message in result.messages)
 
 
 def test_direct_images_edit_is_the_only_production_request(
@@ -249,13 +266,13 @@ def test_direct_images_edit_is_the_only_production_request(
 
 
 def test_application_and_prompt_versions_are_independent(app_module):
-    assert app_module.PROGRAM_VERSION == "5.0"
-    assert app_module.PROMPT_VERSION == "V5.0"
-    assert app_module.DISPLAY_APPLICATION_NAME == "MyEstatePics AI Editor - Direct V5.0"
-    assert app_module.REVIEW_PDF_VERSION == "V5.0"
+    assert app_module.PROGRAM_VERSION == "5.1"
+    assert app_module.PROMPT_VERSION == "V5.1"
+    assert app_module.DISPLAY_APPLICATION_NAME == "MyEstatePics AI Editor - Direct V5.1"
+    assert app_module.REVIEW_PDF_VERSION == "V5.1"
 
 
-def test_v4_batch_uses_local_rules_without_an_additional_api_request(tmp_path, app_module):
+def test_v51_batch_uses_no_filename_triggered_window_rules(tmp_path, app_module):
     configure_tmp(app_module, tmp_path)
     app_module.USER_DATA_DIR = tmp_path / "Application Support" / "MyEstatePics AI Editor - Direct"
     source = app_module.INPUT_DIR / "Kitchen Window.jpg"
@@ -276,11 +293,12 @@ def test_v4_batch_uses_local_rules_without_an_additional_api_request(tmp_path, a
     assert len(calls) == 1
     assert calls[0]["model"] == "gpt-image-2"
     assert "APPROVED LOCAL EDITING LESSONS" in calls[0]["prompt"]
-    assert "WINDOW_IDENTITY_001" in calls[0]["prompt"]
+    assert "WINDOW_IDENTITY_001" not in calls[0]["prompt"]
+    assert "WINDOW_SKY_001" not in calls[0]["prompt"]
     with summary.log_path.open(newline="", encoding="utf-8") as handle:
         row = next(csv.DictReader(handle))
     assert row["api_request_count"] == "1"
-    assert "WINDOW_IDENTITY_001" in row["learned_rule_ids"]
+    assert "WINDOW_IDENTITY_001" not in row["learned_rule_ids"]
     assert row["learned_rules_hash"]
     assert (app_module.USER_DATA_DIR / "learned_rules.json").exists()
 
@@ -356,8 +374,8 @@ def test_batch_review_pdfs_are_local_ordered_and_preserve_failed_position(
         inputs, outputs, "test-review-pdfs"
     )
 
-    assert before_pdf.name == "MyEstatePics_V5.0_BEFORE.pdf"
-    assert after_pdf.name == "MyEstatePics_V5.0_AFTER.pdf"
+    assert before_pdf.name == "MyEstatePics_V5.1_BEFORE.pdf"
+    assert after_pdf.name == "MyEstatePics_V5.1_AFTER.pdf"
     assert before_pdf.parent == after_pdf.parent
     assert before_pdf.read_bytes().startswith(b"%PDF")
     assert after_pdf.read_bytes().startswith(b"%PDF")
@@ -688,7 +706,7 @@ def test_paid_confirmation_summarizes_only_checked_images(app_module):
     assert "Quality: Medium" in text
     assert "Estimated cost: $0.32" in text
     assert "Demo Mode: Off" in text
-    assert "Prompt: MLS Production V5.0" in text
+    assert "Prompt: MLS Production V5.1" in text
 
 
 def test_retry_confirmation_queues_without_claiming_to_start(app_module):

@@ -4,6 +4,16 @@ This file records the production architecture history relevant to the frozen
 Direct release. The older engineering timeline remains available in
 [`docs/CHANGELOG.md`](docs/CHANGELOG.md).
 
+## V5.1 window-fidelity containment
+
+- Removes all window-pull, blue-sky, and exterior-reconstruction requests from
+  the production prompt and adaptive instructions.
+- Disables filename-triggered window and sky Editing Memory rules.
+- Adds conservative source-versus-output review signals for colorized bright
+  regions, saturation increases, possible edge/boundary changes, highlight
+  clipping, and lifted blacks. These are review signals only; V5.1 has no
+  reliable local window detector and does not claim authentic window recovery.
+
 ## V5.0 one-chance production candidate
 
 - Starts directly from the approved V4.0 golden source commit

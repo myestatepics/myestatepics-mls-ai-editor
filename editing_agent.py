@@ -1,4 +1,4 @@
-"""Local, auditable editing-rule memory for MyEstatePics Direct V5.0.
+"""Local, auditable editing-rule memory for MyEstatePics Direct V5.1.
 
 This module deliberately has no OpenAI import and no network capability.  It
 only selects approved, relevant local rules and appends them beneath the
@@ -24,7 +24,7 @@ RULES_FILENAME = "learned_rules.json"
 FEEDBACK_FILENAME = "feedback_history.jsonl"
 RULE_STATES = {"PROPOSED", "APPROVED", "DISABLED"}
 RULE_CATEGORIES = {
-    "GLOBAL", "INTERIOR", "EXTERIOR", "WINDOW", "SHEER_CURTAIN", "SKY",
+    "GLOBAL", "INTERIOR", "EXTERIOR",
     "WALL", "CEILING", "HARDWOOD", "CARPET", "CABINET", "MIRROR",
     "REFLECTION", "TWILIGHT", "ARTIFACT",
 }
@@ -107,12 +107,6 @@ def _seed_rules() -> list[LearnedRule]:
             "Avoid crosshatch, checkerboard, fake weave, artificial microtexture, excessive clarity, sharpening halos, and edge ringing.", "APPROVED", True, approved, approved),
         LearnedRule("INTERIOR_WALLS_001", ("INTERIOR", "WALL", "CEILING"), "Preserve natural interior illumination.",
             "Preserve original paint color, natural illumination gradients, and architectural depth; avoid gray patches, wavy patches, flattened walls, and color drift.", "APPROVED", True, approved, approved),
-        LearnedRule("WINDOW_IDENTITY_001", ("WINDOW",), "Preserve real exterior identity during window pull.",
-            "Maintain a strong professional MLS window pull while preserving actual exterior scene identity; do not introduce unsupported houses, buildings, roofs, fences, vehicles, or structures.", "APPROVED", True, approved, approved),
-        LearnedRule("SHEER_CURTAIN_001", ("SHEER_CURTAIN", "WINDOW"), "Respect curtain-obscured exterior detail.",
-            "Through sheer curtains, preserve the natural softness and visibility limitation; do not create unnaturally crisp exterior objects through obscuring fabric.", "APPROVED", True, approved, approved),
-        LearnedRule("WINDOW_SKY_001", ("WINDOW", "SKY"), "Keep window-visible sky restrained.",
-            "Where genuine source sky is visible through a confirmed window, keep it light, natural, restrained, and realistic; avoid deep, electric, cyan, turquoise, cobalt, or HDR-looking blue.", "APPROVED", True, approved, approved),
         LearnedRule("HARDWOOD_001", ("HARDWOOD",), "Protect sunlit hardwood.",
             "Preserve original hardwood color, visible grain, sunlight, and natural highlight transitions; do not wash sunlit hardwood toward white or yellow.", "APPROVED", True, approved, approved),
         LearnedRule("MIRROR_REFLECTION_001", ("MIRROR", "REFLECTION"), "Remove equipment only without inventing reflections.",
@@ -189,10 +183,6 @@ class EditingAgent:
         categories = ["GLOBAL"]
         if any(token in name for token in ("kitchen", "bath", "bed", "living", "dining", "office", "laundry", "hall", "basement", "garage", "interior")):
             categories.append("INTERIOR")
-        if any(token in name for token in ("window", "sliding", "glass door", "patio door")):
-            categories.append("WINDOW")
-        if any(token in name for token in ("sheer", "curtain")):
-            categories.append("SHEER_CURTAIN")
         if any(token in name for token in ("mirror", "reflection")):
             categories.extend(("MIRROR", "REFLECTION"))
         if "hardwood" in name or "wood floor" in name:

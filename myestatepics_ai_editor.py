@@ -1,5 +1,5 @@
 """
-MyEstatePics MLS Interior Batch Editor — Direct V5.0
+MyEstatePics MLS Interior Batch Editor — Direct V5.1
 
 Workflow:
     Incoming/*.jpg or *.jpeg
@@ -60,8 +60,8 @@ from reportlab.pdfgen import canvas
 DEFAULT_APPLICATION_NAME = "MyEstatePics AI Editor"
 DIRECT_TEST_APPLICATION_NAME = "MyEstatePics AI Editor - Direct"
 # The bundle/Finder name is versioned, but this identity deliberately remains
-# stable so V5.0 reuses the established Direct Application Support settings.
-DISPLAY_APPLICATION_NAME = "MyEstatePics AI Editor - Direct V5.0"
+# stable so V5.1 reuses the established Direct Application Support settings.
+DISPLAY_APPLICATION_NAME = "MyEstatePics AI Editor - Direct V5.1"
 APPLICATION_NAME = os.environ.get(
     "MYESTATEPICS_APPLICATION_NAME", DEFAULT_APPLICATION_NAME
 )
@@ -147,8 +147,8 @@ PROMPT_FILE = resource_path("prompts/mls_production.txt")
 LEARNED_RULES_FILE = USER_DATA_DIR / "learned_rules.json"
 FEEDBACK_HISTORY_FILE = USER_DATA_DIR / "feedback_history.jsonl"
 
-PROGRAM_VERSION = "5.0"
-PROMPT_VERSION = "V5.0"
+PROGRAM_VERSION = "5.1"
+PROMPT_VERSION = "V5.1"
 MODEL = "gpt-image-2"
 QUALITY = "low"
 QUALITY_OPTIONS = ("low", "medium", "high")
@@ -160,7 +160,7 @@ SQUARE_SIZE = "1024x1024"
 IMAGES_EDIT_API_PATH = "/v1/images/edits"
 API_OUTPUT_FORMAT = "png"
 JPEG_OUTPUT_QUALITY = 100
-REVIEW_PDF_VERSION = "V5.0"
+REVIEW_PDF_VERSION = "V5.1"
 REVIEW_PDF_MAX_IMAGE_EDGE = 1200
 DPI = (300, 300)
 OBSERVED_ESTIMATED_COST_PER_IMAGE = 0.28 / 6.0
@@ -328,7 +328,7 @@ def load_prompt() -> str:
 
 
 def editing_agent() -> EditingAgent:
-    """Return the zero-API V5.0 rule-memory layer using stable app support."""
+    """Return the zero-API V5.1 rule-memory layer using stable app support."""
     return EditingAgent(USER_DATA_DIR)
 
 
@@ -440,6 +440,68 @@ def normalized_edge_sharpness(arr: np.ndarray) -> float:
     gy, gx = np.gradient(luminance)
     edge_energy = gx * gx + gy * gy
     return float(np.mean(edge_energy))
+
+
+def saturation_from_rgb(arr: np.ndarray) -> np.ndarray:
+    """Return HSV-style saturation without altering the image."""
+    maximum = arr.max(axis=2)
+    minimum = arr.min(axis=2)
+    return (maximum - minimum) / np.maximum(maximum, 1e-6)
+
+
+def possible_bright_window_review_signals(
+    source_arr: np.ndarray, output_arr: np.ndarray
+) -> list[str]:
+    """Return conservative comparative review signals for bright source regions.
+
+    This is intentionally not a window detector: the application has no masks,
+    brackets, or local semantic model capable of locating a real window. It can
+    only flag material changes inside large, bright, near-neutral source regions
+    that may include a window, wall, cabinet, or counter.
+    """
+    source_luminance = luminance_from_rgb(source_arr)
+    source_saturation = saturation_from_rgb(source_arr)
+    output_saturation = saturation_from_rgb(output_arr)
+    candidate_mask = (source_luminance >= 0.84) & (source_saturation <= 0.12)
+    if float(candidate_mask.mean()) < 0.005:
+        return []
+
+    messages: list[str] = []
+    saturation_increase = float(
+        np.median(output_saturation[candidate_mask])
+        - np.median(source_saturation[candidate_mask])
+    )
+    output_blue = output_arr[..., 2] - np.maximum(output_arr[..., 0], output_arr[..., 1])
+    output_green = output_arr[..., 1] - np.maximum(output_arr[..., 0], output_arr[..., 2])
+    colorized_fraction = float(((output_blue > 0.10) | (output_green > 0.10))[candidate_mask].mean())
+    if colorized_fraction > 0.08:
+        messages.append(
+            "Possible generated blue/green content in a bright source region; "
+            "human review required (not a conclusive window detector)."
+        )
+    if saturation_increase > 0.16:
+        messages.append(
+            "Possible substantial saturation increase in a bright source region; "
+            "human review required (not a conclusive window detector)."
+        )
+
+    source_edge_energy = normalized_edge_sharpness(source_arr)
+    output_edge_energy = normalized_edge_sharpness(output_arr)
+    if output_edge_energy > max(source_edge_energy * 2.4, 0.002):
+        messages.append(
+            "Possible new high-frequency structure or edge change; human review "
+            "required (not a conclusive exterior-object detector)."
+        )
+
+    output_luminance = luminance_from_rgb(output_arr)
+    output_neutral_mask = (output_luminance >= 0.84) & (output_saturation <= 0.12)
+    overlap = float((candidate_mask & output_neutral_mask).sum()) / max(1, int(candidate_mask.sum()))
+    if overlap < 0.35:
+        messages.append(
+            "Possible bright-region boundary or frame change; human review required "
+            "because real window regions are not locally detected."
+        )
+    return messages
 
 
 def analyze_white_balance(arr: np.ndarray) -> dict[str, Any]:
@@ -568,7 +630,7 @@ def build_adaptive_addendum(metrics: dict[str, Any]) -> str:
         )
     elif mean > 0.62 or highlight_fraction > 0.16:
         lines.append(
-            "- This room is already bright. Protect white surfaces and window "
+            "- This room is already bright. Protect white surfaces and bright "
             "highlights; do not add unnecessary exposure."
         )
     else:
@@ -578,7 +640,7 @@ def build_adaptive_addendum(metrics: dict[str, Any]) -> str:
 
     if contrast_span > 0.72:
         lines.append(
-            "- The scene has high contrast. Balance room shadows and window highlights "
+            "- The scene has high contrast. Balance room shadows and bright highlights "
             "without flattening the room or creating HDR tonality."
         )
     elif contrast_span < 0.42:
@@ -597,12 +659,6 @@ def build_adaptive_addendum(metrics: dict[str, Any]) -> str:
             "- White balance must remain neutral. No reliable image-specific cast "
             "measurement was available, so avoid aggressive warm or cool correction."
         )
-
-    lines.append(
-        "- Genuine open sky visible through windows must appear soft natural light blue. "
-        "Never tint glass, brick, roofs, buildings, trees, grass, frames, reflections, "
-        "or interior surfaces blue."
-    )
 
     return "\n".join(lines)
 
@@ -863,7 +919,8 @@ def compare_images(
     if highlight_clip_fraction > MAX_HIGHLIGHT_CLIP_FRACTION:
         status = "REVIEW" if status == "PASS" else status
         messages.append(
-            f"High clipped-highlight fraction: {highlight_clip_fraction:.1%}."
+            f"High clipped-highlight fraction: {highlight_clip_fraction:.1%}; "
+            "review white cabinets, counters, walls, and ceilings."
         )
 
     if shadow_crush_fraction > MAX_SHADOW_CRUSH_FRACTION:
@@ -878,6 +935,19 @@ def compare_images(
             f"Large brightness-independent chromaticity shift: {color_shift:.4f}. "
             "This is a review signal, not proof of a specific material-color change."
         )
+
+    input_black_fraction = float((in_lum < 0.10).mean())
+    output_black_fraction = float((out_lum < 0.10).mean())
+    if input_black_fraction >= 0.04 and output_black_fraction < input_black_fraction * 0.35:
+        status = "REVIEW" if status == "PASS" else status
+        messages.append(
+            "Possible loss of shadow depth or excessively elevated black levels; "
+            "human review required."
+        )
+
+    for signal in possible_bright_window_review_signals(source_arr, output_arr):
+        status = "REVIEW" if status == "PASS" else status
+        messages.append(signal)
 
     if not messages:
         messages.append("Deterministic checks passed.")
@@ -3125,7 +3195,7 @@ def launch_gui() -> int:
 
         def __init__(self, parent=None):
             super().__init__(parent)
-            self.setWindowTitle("Editing Memory — MyEstatePics V5.0")
+            self.setWindowTitle("Editing Memory — MyEstatePics V5.1")
             self.resize(920, 480)
             layout = QVBoxLayout(self)
             explanation = QLabel(
