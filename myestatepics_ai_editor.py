@@ -1,5 +1,5 @@
 """
-MyEstatePics MLS Interior Batch Editor — Direct V5.1
+MyEstatePics MLS Interior Batch Editor — Direct V5.2
 
 Workflow:
     Incoming/*.jpg or *.jpeg
@@ -60,8 +60,8 @@ from reportlab.pdfgen import canvas
 DEFAULT_APPLICATION_NAME = "MyEstatePics AI Editor"
 DIRECT_TEST_APPLICATION_NAME = "MyEstatePics AI Editor - Direct"
 # The bundle/Finder name is versioned, but this identity deliberately remains
-# stable so V5.1 reuses the established Direct Application Support settings.
-DISPLAY_APPLICATION_NAME = "MyEstatePics AI Editor - Direct V5.1"
+# stable so V5.2 reuses the established Direct Application Support settings.
+DISPLAY_APPLICATION_NAME = "MyEstatePics AI Editor - Direct V5.2"
 APPLICATION_NAME = os.environ.get(
     "MYESTATEPICS_APPLICATION_NAME", DEFAULT_APPLICATION_NAME
 )
@@ -147,8 +147,8 @@ PROMPT_FILE = resource_path("prompts/mls_production.txt")
 LEARNED_RULES_FILE = USER_DATA_DIR / "learned_rules.json"
 FEEDBACK_HISTORY_FILE = USER_DATA_DIR / "feedback_history.jsonl"
 
-PROGRAM_VERSION = "5.1"
-PROMPT_VERSION = "V5.1"
+PROGRAM_VERSION = "5.2"
+PROMPT_VERSION = "V5.2"
 MODEL = "gpt-image-2"
 QUALITY = "low"
 QUALITY_OPTIONS = ("low", "medium", "high")
@@ -160,7 +160,7 @@ SQUARE_SIZE = "1024x1024"
 IMAGES_EDIT_API_PATH = "/v1/images/edits"
 API_OUTPUT_FORMAT = "png"
 JPEG_OUTPUT_QUALITY = 100
-REVIEW_PDF_VERSION = "V5.1"
+REVIEW_PDF_VERSION = "V5.2"
 REVIEW_PDF_MAX_IMAGE_EDGE = 1200
 DPI = (300, 300)
 OBSERVED_ESTIMATED_COST_PER_IMAGE = 0.28 / 6.0
@@ -173,10 +173,22 @@ SHARPNESS_REVIEW_RATIO = 0.60
 SHARPNESS_FAIL_RATIO = 0.45
 SHARPNESS_AUTO_FIX_MIN_RATIO = 0.55
 SHARPNESS_AUTO_FIX_MAX_RATIO = 0.85
-MAX_GLOBAL_BRIGHTNESS_SHIFT = 0.34
 MAX_HIGHLIGHT_CLIP_FRACTION = 0.24
+MAX_HIGHLIGHT_CLIP_INCREASE = 0.020
 MAX_SHADOW_CRUSH_FRACTION = 0.28
-MAX_GLOBAL_CHROMATICITY_SHIFT = 0.055
+MAX_GLOBAL_CHROMATICITY_SHIFT = 0.040
+MAX_SHADOW_LUMINANCE_INCREASE = 0.075
+MAX_CONTRAST_LOSS_RATIO = 0.22
+MAX_LIGHT_MATERIAL_SEPARATION_LOSS = 0.24
+MAX_GLOBAL_SATURATION_INCREASE = 0.060
+MAX_REGIONAL_SATURATION_INCREASE = 0.075
+MAX_DARK_MATERIAL_LUMINANCE_INCREASE = 0.090
+MAX_DARK_MATERIAL_CHROMATICITY_SHIFT = 0.035
+MAX_BOUNDARY_EDGE_INCREASE = 2.0
+OUTPUT_UPSCALE_SHARPEN_RADIUS = 0.55
+OUTPUT_UPSCALE_SHARPEN_PERCENT = 12
+OUTPUT_UPSCALE_SHARPEN_THRESHOLD = 10
+OUTPUT_UPSCALE_SHARPEN_BLEND = 0.16
 ENABLE_AUTO_SHARPEN = False
 UNSHARP_RADIUS = 0.8
 UNSHARP_PERCENT = 45
@@ -328,7 +340,7 @@ def load_prompt() -> str:
 
 
 def editing_agent() -> EditingAgent:
-    """Return the zero-API V5.1 rule-memory layer using stable app support."""
+    """Return the zero-API V5.2 rule-memory layer using stable app support."""
     return EditingAgent(USER_DATA_DIR)
 
 
@@ -605,7 +617,7 @@ def analyze_input(input_file: Path) -> dict[str, Any]:
     p90 = float(np.percentile(luminance, 90))
     wb = analyze_white_balance(arr)
 
-    return {
+    metrics = {
         "mean": float(luminance.mean()),
         "contrast_span": p90 - p10,
         "shadow_fraction": float((luminance < 0.18).mean()),
@@ -613,43 +625,65 @@ def analyze_input(input_file: Path) -> dict[str, Any]:
         "sharpness": normalized_edge_sharpness(arr),
         "wb": wb,
     }
+    metrics["exposure_class"] = classify_exposure(metrics)
+    return metrics
+
+
+def classify_exposure(metrics: dict[str, Any]) -> str:
+    """Classify exposure from pixels only; filenames never influence this decision."""
+    mean = float(metrics["mean"])
+    shadows = float(metrics["shadow_fraction"])
+    highlights = float(metrics["highlight_fraction"])
+    if mean >= 0.58 or highlights >= 0.12:
+        return "bright_high_key"
+    if mean < 0.28 and shadows >= 0.20:
+        return "dark"
+    if mean < 0.43 or shadows >= 0.20:
+        return "moderately_underexposed"
+    return "already_balanced"
 
 
 def build_adaptive_addendum(metrics: dict[str, Any]) -> str:
     lines = ["IMAGE-SPECIFIC ADAPTIVE INSTRUCTIONS:"]
 
-    mean = metrics["mean"]
     contrast_span = metrics["contrast_span"]
-    shadow_fraction = metrics["shadow_fraction"]
-    highlight_fraction = metrics["highlight_fraction"]
+    exposure_class = metrics.get("exposure_class") or classify_exposure(metrics)
 
-    if mean < 0.38 or shadow_fraction > 0.30:
+    if exposure_class == "dark":
         lines.append(
-            "- This room is underexposed. Recover shadows and midtones moderately "
-            "until it looks naturally bright, while retaining realistic black depth."
+            "- This room is dark. Apply restrained shadow and midtone recovery only. "
+            "Do not globally brighten, lift the black point, or make deep shadows pale."
         )
-    elif mean > 0.62 or highlight_fraction > 0.16:
+    elif exposure_class == "moderately_underexposed":
         lines.append(
-            "- This room is already bright. Protect white surfaces and bright "
-            "highlights; do not add unnecessary exposure."
+            "- This room is moderately underexposed. Apply a mild local shadow and "
+            "midtone lift only; preserve dark-room anchoring, corners, and black depth."
+        )
+    elif exposure_class == "already_balanced":
+        lines.append(
+            "- This exposure is already balanced. Make minimal exposure change and "
+            "preserve the source contrast, material color, and architectural depth."
         )
     else:
         lines.append(
-            "- Exposure is close to usable. Apply only a restrained MLS brightness correction."
+            "- This is a bright or high-key scene. Do not brighten it. Protect or "
+            "reduce only local highlights while retaining light-material separation."
         )
 
     if contrast_span > 0.72:
         lines.append(
-            "- The scene has high contrast. Balance room shadows and bright highlights "
-            "without flattening the room or creating HDR tonality."
+            "- The scene has high contrast. Recover only what is necessary in shadows "
+            "and midtones; keep natural falloff, black point, and foreground-to-background depth."
         )
     elif contrast_span < 0.42:
         lines.append(
-            "- The scene is relatively flat. Add restrained local contrast while "
-            "preserving natural shadows and material texture."
+            "- The scene is relatively flat. Preserve the existing natural contrast; "
+            "do not add global brightness, vibrance, HDR flattening, or artificial clarity."
         )
     else:
-        lines.append("- Preserve the existing natural contrast structure and depth.")
+        lines.append(
+            "- Preserve the existing natural contrast structure, shadow density, and depth."
+        )
 
     wb_instruction = metrics["wb"].get("instruction", "")
     if wb_instruction:
@@ -847,23 +881,60 @@ def encode_final_jpeg(
     return buffer.getvalue(), JPEG_OUTPUT_QUALITY
 
 
+def upscale_for_delivery(
+    generated_image: Image.Image,
+    input_file: Path,
+) -> tuple[Image.Image, bool]:
+    """Locally return the edit to the original delivery dimensions without cropping.
+
+    GPT Image 2 currently returns one of its supported native output sizes. This
+    is a free, deterministic Lanczos enlargement of those generated pixels; it
+    does not restore native source detail and must never be described as native
+    6000x4000 generation. A very light post-enlargement sharpen is used only to
+    avoid the soft interpolation look, not to invent texture.
+    """
+    with Image.open(input_file) as source:
+        target_size = source.size
+
+    rgb = generated_image.convert("RGB")
+    if rgb.size == target_size:
+        return rgb, False
+
+    source_ratio = target_size[0] / target_size[1]
+    generated_ratio = rgb.width / rgb.height
+    if abs(source_ratio - generated_ratio) > 0.002:
+        raise ValueError(
+            "Generated image aspect ratio does not match the source; refusing "
+            "to crop or distort delivery output."
+        )
+
+    enlarged = rgb.resize(target_size, Image.Resampling.LANCZOS)
+    sharpened = enlarged.filter(
+        ImageFilter.UnsharpMask(
+            radius=OUTPUT_UPSCALE_SHARPEN_RADIUS,
+            percent=OUTPUT_UPSCALE_SHARPEN_PERCENT,
+            threshold=OUTPUT_UPSCALE_SHARPEN_THRESHOLD,
+        )
+    )
+    return Image.blend(enlarged, sharpened, OUTPUT_UPSCALE_SHARPEN_BLEND), True
+
+
 
 def allowed_brightness_shift(input_mean: float) -> float:
     """
-    Allow stronger exposure correction for darker source images.
+    Conservative review limits for brightness increase.
 
-    This matches the actual MLS workflow: very dark rooms may need a large
-    brightness increase, while already bright rooms should change much less.
+    Dark rooms may receive restrained shadow/midtone recovery, but no input
+    class permits the broad whole-image lift that caused the V5.1 pilot to lose
+    black-point strength and architectural depth.
     """
     if input_mean < 0.25:
-        return 0.45
-    if input_mean < 0.35:
-        return 0.38
-    if input_mean < 0.45:
-        return 0.32
-    if input_mean < 0.55:
-        return 0.27
-    return 0.22
+        return 0.16
+    if input_mean < 0.43:
+        return 0.12
+    if input_mean < 0.58:
+        return 0.075
+    return 0.045
 
 
 def compare_images(
@@ -871,6 +942,12 @@ def compare_images(
     output_image: Image.Image,
     sharpened: bool,
 ) -> VerificationResult:
+    """Apply conservative statistical review gates to source/output pixels.
+
+    These checks are intentionally not semantic proof of material, window, or
+    architectural fidelity. They identify suspicious global or regional drift
+    and route those outputs to human review rather than reporting MLS approval.
+    """
     with Image.open(input_file) as source:
         source_arr = image_to_rgb_array(source, NORMALIZED_LONG_EDGE)
 
@@ -883,8 +960,10 @@ def compare_images(
     out_sharpness = normalized_edge_sharpness(output_arr)
     sharpness_ratio = out_sharpness / in_sharpness
 
-    brightness_shift = float(abs(out_lum.mean() - in_lum.mean()))
+    luminance_increase = float(out_lum.mean() - in_lum.mean())
+    brightness_shift = abs(luminance_increase)
     highlight_clip_fraction = float((out_lum > 0.985).mean())
+    input_highlight_clip_fraction = float((in_lum > 0.985).mean())
     shadow_crush_fraction = float((out_lum < 0.03).mean())
 
     color_shift = chromaticity_shift(source_arr, output_arr)
@@ -904,22 +983,24 @@ def compare_images(
         )
 
     input_mean_brightness = float(in_lum.mean())
-    brightness_limit = max(
-        MAX_GLOBAL_BRIGHTNESS_SHIFT,
-        allowed_brightness_shift(input_mean_brightness),
-    )
+    brightness_limit = allowed_brightness_shift(input_mean_brightness)
 
-    if brightness_shift > brightness_limit:
+    if luminance_increase > brightness_limit:
         status = "REVIEW" if status == "PASS" else status
         messages.append(
-            f"Large global brightness shift: {brightness_shift:.3f} "
+            f"Excessive global luminance increase: {luminance_increase:.3f} "
             f"(adaptive limit {brightness_limit:.3f})."
         )
 
-    if highlight_clip_fraction > MAX_HIGHLIGHT_CLIP_FRACTION:
+    highlight_clip_increase = highlight_clip_fraction - input_highlight_clip_fraction
+    if (
+        highlight_clip_fraction > MAX_HIGHLIGHT_CLIP_FRACTION
+        or highlight_clip_increase > MAX_HIGHLIGHT_CLIP_INCREASE
+    ):
         status = "REVIEW" if status == "PASS" else status
         messages.append(
-            f"High clipped-highlight fraction: {highlight_clip_fraction:.1%}; "
+            f"Increased clipped highlights: output={highlight_clip_fraction:.1%}, "
+            f"change={highlight_clip_increase:+.1%}; "
             "review white cabinets, counters, walls, and ceilings."
         )
 
@@ -932,17 +1013,112 @@ def compare_images(
     if color_shift > MAX_GLOBAL_CHROMATICITY_SHIFT:
         status = "REVIEW" if status == "PASS" else status
         messages.append(
-            f"Large brightness-independent chromaticity shift: {color_shift:.4f}. "
-            "This is a review signal, not proof of a specific material-color change."
+            f"Possible material-color drift: global chromaticity shift {color_shift:.4f}. "
+            "This is a conservative statistical signal, not semantic proof."
         )
 
     input_black_fraction = float((in_lum < 0.10).mean())
     output_black_fraction = float((out_lum < 0.10).mean())
-    if input_black_fraction >= 0.04 and output_black_fraction < input_black_fraction * 0.35:
+    if input_black_fraction >= 0.02 and output_black_fraction < input_black_fraction * 0.65:
         status = "REVIEW" if status == "PASS" else status
         messages.append(
             "Possible loss of shadow depth or excessively elevated black levels; "
             "human review required."
+        )
+
+    shadow_mask = in_lum < 0.18
+    if float(shadow_mask.mean()) >= 0.01:
+        shadow_lift = float(out_lum[shadow_mask].mean() - in_lum[shadow_mask].mean())
+        if shadow_lift > MAX_SHADOW_LUMINANCE_INCREASE:
+            status = "REVIEW" if status == "PASS" else status
+            messages.append(
+                f"Excessive shadow luminance increase: {shadow_lift:.3f}; "
+                "human review required for black point and architectural depth."
+            )
+
+    input_contrast = float(np.percentile(in_lum, 90) - np.percentile(in_lum, 10))
+    output_contrast = float(np.percentile(out_lum, 90) - np.percentile(out_lum, 10))
+    if input_contrast > 0.03 and output_contrast < input_contrast * (1 - MAX_CONTRAST_LOSS_RATIO):
+        status = "REVIEW" if status == "PASS" else status
+        messages.append(
+            f"Possible local-contrast loss: {output_contrast / input_contrast:.2f}x source; "
+            "human review required for room depth and material separation."
+        )
+
+    source_saturation = saturation_from_rgb(source_arr)
+    output_saturation = saturation_from_rgb(output_arr)
+    global_saturation_increase = float(
+        np.median(output_saturation) - np.median(source_saturation)
+    )
+    if global_saturation_increase > MAX_GLOBAL_SATURATION_INCREASE:
+        status = "REVIEW" if status == "PASS" else status
+        messages.append(
+            f"Excessive global saturation increase: {global_saturation_increase:.3f}; "
+            "review rugs, foliage, artwork, fabrics, and finishes."
+        )
+
+    colored_mask = source_saturation >= 0.20
+    if float(colored_mask.mean()) >= 0.01:
+        regional_saturation_increase = float(
+            np.median(output_saturation[colored_mask])
+            - np.median(source_saturation[colored_mask])
+        )
+        if regional_saturation_increase > MAX_REGIONAL_SATURATION_INCREASE:
+            status = "REVIEW" if status == "PASS" else status
+            messages.append(
+                f"Possible regional saturation increase: {regional_saturation_increase:.3f}; "
+                "human review required for rug, foliage, fabric, or artwork color drift."
+            )
+
+    dark_material_mask = (
+        (in_lum >= 0.06)
+        & (in_lum <= 0.45)
+        & (source_saturation <= 0.45)
+    )
+    if float(dark_material_mask.mean()) >= 0.02:
+        dark_material_lift = float(
+            out_lum[dark_material_mask].mean() - in_lum[dark_material_mask].mean()
+        )
+        dark_material_chroma = chromaticity_shift(
+            source_arr[dark_material_mask].reshape(-1, 1, 3),
+            output_arr[dark_material_mask].reshape(-1, 1, 3),
+        )
+        if dark_material_lift > MAX_DARK_MATERIAL_LUMINANCE_INCREASE:
+            status = "REVIEW" if status == "PASS" else status
+            messages.append(
+                f"Possible dark-material brightness drift: {dark_material_lift:.3f}; "
+                "this may include carpet or hardwood and requires human review."
+            )
+        if dark_material_chroma > MAX_DARK_MATERIAL_CHROMATICITY_SHIFT:
+            status = "REVIEW" if status == "PASS" else status
+            messages.append(
+                f"Possible dark-material color drift: {dark_material_chroma:.4f}; "
+                "this may include carpet or hardwood and requires human review."
+            )
+
+    light_material_mask = (
+        (in_lum >= 0.58)
+        & (in_lum <= 0.97)
+        & (source_saturation <= 0.18)
+    )
+    if float(light_material_mask.mean()) >= 0.02:
+        source_separation = float(np.std(in_lum[light_material_mask]))
+        output_separation = float(np.std(out_lum[light_material_mask]))
+        if (
+            source_separation > 0.015
+            and output_separation < source_separation * (1 - MAX_LIGHT_MATERIAL_SEPARATION_LOSS)
+        ):
+            status = "REVIEW" if status == "PASS" else status
+            messages.append(
+                "Possible reduced light-material separation; review white cabinets, "
+                "walls, trim, counters, backsplash, tile, and fixtures."
+            )
+
+    if out_sharpness > in_sharpness * MAX_BOUNDARY_EDGE_INCREASE:
+        status = "REVIEW" if status == "PASS" else status
+        messages.append(
+            "Possible geometry or boundary-edge change; human review required "
+            "(statistical signal, not semantic proof)."
         )
 
     for signal in possible_bright_window_review_signals(source_arr, output_arr):
@@ -2459,6 +2635,20 @@ def process_batch(
             generated_image, sharpened = maybe_apply_gentle_sharpening(
                 input_file, generated_image
             )
+            native_generated_size = generated_image.size
+            generated_image, delivery_upscaled = upscale_for_delivery(
+                generated_image, input_file
+            )
+            sharpened = sharpened or delivery_upscaled
+            if delivery_upscaled:
+                logging.info(
+                    "Local delivery upscale: filename=%s generated_size=%sx%s "
+                    "delivery_size=%sx%s method=lanczos restrained_sharpen=true "
+                    "native_detail_restored=false",
+                    input_file.name,
+                    native_generated_size[0], native_generated_size[1],
+                    generated_image.width, generated_image.height,
+                )
             verification = compare_images(input_file, generated_image, sharpened)
             jpeg_bytes, jpeg_quality = encode_final_jpeg(
                 generated_image, input_file
@@ -2469,7 +2659,7 @@ def process_batch(
                     f"Invalid generated dimensions: {generated_image.size[0]}x"
                     f"{generated_image.size[1]}; each dimension must be at least 64 pixels."
                 )
-            if verification.status == "FAIL":
+            if verification.status in {"REVIEW", "FAIL"}:
                 review_reasons.extend(verification.messages)
             if premium_finish_error:
                 review_reasons.append(premium_finish_error)
@@ -3195,7 +3385,7 @@ def launch_gui() -> int:
 
         def __init__(self, parent=None):
             super().__init__(parent)
-            self.setWindowTitle("Editing Memory — MyEstatePics V5.1")
+            self.setWindowTitle("Editing Memory — MyEstatePics V5.2")
             self.resize(920, 480)
             layout = QVBoxLayout(self)
             explanation = QLabel(

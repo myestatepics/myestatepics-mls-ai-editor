@@ -151,13 +151,16 @@ def test_external_production_prompt_preserves_foundation_and_adds_fidelity_rules
     assert "WINDOW FIDELITY — PRESERVE SOURCE ONLY" in loaded_prompt
     assert "Preserve the window exactly as supplied." in loaded_prompt
     assert "If the window is white or\nblown out, leave it naturally bright and neutral." in loaded_prompt
-    assert "V5.1 CAPABILITY BOUNDARY" in loaded_prompt
-    assert "V5.1 performs interior enhancement only." in loaded_prompt
+    assert "V5.2 CAPABILITY BOUNDARY" in loaded_prompt
+    assert "V5.2 performs interior enhancement only." in loaded_prompt
     assert "It does not perform authentic window\npulls." in loaded_prompt
     assert "Never create a fake window" in loaded_prompt
     assert "outdoor scenery inside a mirror" in loaded_prompt
     assert "HARDWOOD FLOOR CONTINUITY" in loaded_prompt
     assert "WALL AND CEILING CONTINUITY" in loaded_prompt
+    assert "WHITE-SURFACE PROTECTION" in loaded_prompt
+    assert "Do not apply uniform or whole-image brightening." in loaded_prompt
+    assert "Do not\nglobally increase saturation or vibrance." in loaded_prompt
 
 
 def test_v51_hardwood_glare_clarification_and_window_containment_are_preserved(
@@ -194,7 +197,7 @@ def test_v51_hardwood_glare_clarification_and_window_containment_are_preserved(
     assert "WALL AND CEILING CONTINUITY" in prompt
 
 
-def test_v51_adaptive_prompt_never_requests_window_or_sky_generation(app_module):
+def test_v52_adaptive_prompt_never_requests_window_or_sky_generation(app_module):
     prompt = app_module.build_adaptive_addendum(
         {"mean": 0.30, "contrast_span": 0.80, "shadow_fraction": 0.35,
          "highlight_fraction": 0.20, "wb": {"instruction": ""}}
@@ -202,6 +205,26 @@ def test_v51_adaptive_prompt_never_requests_window_or_sky_generation(app_module)
     assert "sky" not in prompt.casefold()
     assert "window" not in prompt.casefold()
     assert "exterior" not in prompt.casefold()
+    assert "do not brighten it" in prompt.casefold()
+
+
+@pytest.mark.parametrize(
+    ("metrics", "expected_class", "expected_phrase"),
+    [
+        ({"mean": 0.20, "shadow_fraction": 0.30, "highlight_fraction": 0.01}, "dark", "restrained shadow and midtone recovery only"),
+        ({"mean": 0.36, "shadow_fraction": 0.15, "highlight_fraction": 0.02}, "moderately_underexposed", "mild local shadow and midtone lift only"),
+        ({"mean": 0.50, "shadow_fraction": 0.08, "highlight_fraction": 0.04}, "already_balanced", "minimal exposure change"),
+        ({"mean": 0.60, "shadow_fraction": 0.02, "highlight_fraction": 0.13}, "bright_high_key", "Do not brighten it"),
+    ],
+)
+def test_v52_exposure_classification_is_pixel_metric_only(
+    app_module, metrics, expected_class, expected_phrase
+):
+    metrics = {**metrics, "contrast_span": 0.55, "wb": {"instruction": ""}}
+    assert app_module.classify_exposure(metrics) == expected_class
+    prompt = app_module.build_adaptive_addendum(metrics)
+    assert expected_phrase.casefold() in prompt.casefold()
+    assert "filename" not in prompt.casefold()
 
 
 def test_v51_bright_source_colorization_is_reviewed_not_reported_as_window_recovery(
@@ -215,6 +238,65 @@ def test_v51_bright_source_colorization_is_reviewed_not_reported_as_window_recov
     assert result.status in {"REVIEW", "FAIL"}
     assert any("Possible generated blue/green content" in message for message in result.messages)
     assert not any("window pull was completed" in message.casefold() for message in result.messages)
+
+
+def _save_rgb(path, array):
+    Image.fromarray(np.asarray(array, dtype=np.uint8)).save(path, format="JPEG", quality=100)
+
+
+@pytest.mark.parametrize(
+    ("filename", "source_color", "output_color", "expected_signal"),
+    [
+        ("-15-hardwood.jpg", (35, 28, 20), (120, 105, 82), "shadow"),
+        ("-23-white-kitchen.jpg", (220, 220, 220), (254, 254, 254), "highlight"),
+        ("-31-rug-foliage.jpg", (130, 120, 105), (220, 80, 45), "saturation"),
+        ("-37-bedroom.jpg", (195, 195, 190), (253, 253, 250), "luminance"),
+        ("-44-bathroom.jpg", (225, 225, 225), (255, 255, 255), "highlight"),
+        ("-51-basement.jpg", (85, 85, 82), (185, 185, 180), "dark-material"),
+    ],
+)
+def test_v52_pilot_failure_regression_patterns_route_to_review(
+    tmp_path, app_module, filename, source_color, output_color, expected_signal
+):
+    source = tmp_path / filename
+    source_arr = np.full((120, 180, 3), source_color, dtype=np.uint8)
+    # Preserve a modest spatial texture so contrast and material checks have
+    # source variation, as in the real V5.1 pilot photographs.
+    source_arr[:, ::3] = np.maximum(
+        source_arr[:, ::3].astype(np.int16) - 15, 0
+    ).astype(np.uint8)
+    output_arr = np.full((120, 180, 3), output_color, dtype=np.uint8)
+    _save_rgb(source, source_arr)
+
+    result = app_module.compare_images(
+        source, Image.fromarray(output_arr), sharpened=False
+    )
+
+    assert result.status in {"REVIEW", "FAIL"}
+    assert any(expected_signal in message.casefold() for message in result.messages)
+
+
+def test_v52_upscale_returns_exact_source_dimensions_without_crop(tmp_path, app_module):
+    source = tmp_path / "original-6000x4000.jpg"
+    textured_image((600, 400)).save(source, format="JPEG", quality=95, dpi=(300, 300))
+    generated = textured_image((153, 102))
+
+    delivery, sharpened = app_module.upscale_for_delivery(generated, source)
+
+    assert delivery.size == (600, 400)
+    assert sharpened
+    jpeg_bytes, _ = app_module.encode_final_jpeg(delivery, source)
+    with Image.open(BytesIO(jpeg_bytes)) as result:
+        assert result.size == (600, 400)
+        assert result.info["dpi"] == pytest.approx((300, 300), abs=0.1)
+
+
+def test_v52_upscale_refuses_aspect_ratio_distortion(tmp_path, app_module):
+    source = tmp_path / "original.jpg"
+    textured_image((600, 400)).save(source, format="JPEG")
+
+    with pytest.raises(ValueError, match="aspect ratio"):
+        app_module.upscale_for_delivery(textured_image((150, 150)), source)
 
 
 def test_direct_images_edit_is_the_only_production_request(
@@ -266,10 +348,10 @@ def test_direct_images_edit_is_the_only_production_request(
 
 
 def test_application_and_prompt_versions_are_independent(app_module):
-    assert app_module.PROGRAM_VERSION == "5.1"
-    assert app_module.PROMPT_VERSION == "V5.1"
-    assert app_module.DISPLAY_APPLICATION_NAME == "MyEstatePics AI Editor - Direct V5.1"
-    assert app_module.REVIEW_PDF_VERSION == "V5.1"
+    assert app_module.PROGRAM_VERSION == "5.2"
+    assert app_module.PROMPT_VERSION == "V5.2"
+    assert app_module.DISPLAY_APPLICATION_NAME == "MyEstatePics AI Editor - Direct V5.2"
+    assert app_module.REVIEW_PDF_VERSION == "V5.2"
 
 
 def test_v51_batch_uses_no_filename_triggered_window_rules(tmp_path, app_module):
@@ -349,9 +431,11 @@ def test_large_jpeg_is_completed_without_size_based_review(tmp_path, app_module)
 
     output = app_module.OUTPUT_DIR / source.name
     assert images.calls == 1
-    assert summary.completed == 1
-    assert summary.review == 0
-    assert output.exists() and output.stat().st_size > 2_000_000
+    # V5.2 may route the deliberately noisy fixture to review for a real
+    # fidelity signal, but JPEG size itself must never cause failure or retry.
+    assert summary.completed + summary.review == 1
+    delivered = output if output.exists() else app_module.REVIEW_DIR / source.name
+    assert delivered.exists() and delivered.stat().st_size > 2_000_000
 
 
 def test_batch_review_pdfs_are_local_ordered_and_preserve_failed_position(
@@ -374,8 +458,8 @@ def test_batch_review_pdfs_are_local_ordered_and_preserve_failed_position(
         inputs, outputs, "test-review-pdfs"
     )
 
-    assert before_pdf.name == "MyEstatePics_V5.1_BEFORE.pdf"
-    assert after_pdf.name == "MyEstatePics_V5.1_AFTER.pdf"
+    assert before_pdf.name == "MyEstatePics_V5.2_BEFORE.pdf"
+    assert after_pdf.name == "MyEstatePics_V5.2_AFTER.pdf"
     assert before_pdf.parent == after_pdf.parent
     assert before_pdf.read_bytes().startswith(b"%PDF")
     assert after_pdf.read_bytes().startswith(b"%PDF")
@@ -706,7 +790,7 @@ def test_paid_confirmation_summarizes_only_checked_images(app_module):
     assert "Quality: Medium" in text
     assert "Estimated cost: $0.32" in text
     assert "Demo Mode: Off" in text
-    assert "Prompt: MLS Production V5.1" in text
+    assert "Prompt: MLS Production V5.2" in text
 
 
 def test_retry_confirmation_queues_without_claiming_to_start(app_module):
@@ -1223,7 +1307,7 @@ def test_real_and_demo_output_skip_states_are_isolated(tmp_path, app_module):
     assert demo_output.exists()
 
 
-def test_advisory_difference_completes_but_hard_verifier_failure_needs_review(
+def test_any_v52_verifier_review_or_failure_routes_to_needs_review(
     tmp_path, monkeypatch, app_module
 ):
     configure_tmp(app_module, tmp_path)
@@ -1243,8 +1327,9 @@ def test_advisory_difference_completes_but_hard_verifier_failure_needs_review(
     monkeypatch.setattr(app_module, "compare_images", lambda *args: advisory)
     image.save(app_module.INPUT_DIR / "advisory.jpg", format="JPEG", quality=95)
     summary = app_module.process_batch(SimpleNamespace(images=Images()), quality="low")
-    assert summary.completed == 1
-    assert summary.review == 0
+    assert summary.completed == 0
+    assert summary.review == 1
+    assert (app_module.REVIEW_DIR / "advisory.jpg").exists()
 
     failure = app_module.VerificationResult(
         "FAIL", ["Severe normalized sharpness loss."], 0.2, 0.1, 0.01, 0.0, 0.0, False

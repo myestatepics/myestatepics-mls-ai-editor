@@ -1,4 +1,4 @@
-# MyEstatePics AI Editor — Direct V5.1 Candidate
+# MyEstatePics AI Editor — Direct V5.2 Candidate
 
 MyEstatePics AI Editor is a macOS PySide6 desktop application for conservative,
 batch-oriented enhancement of real-estate photographs. The frozen production
@@ -11,8 +11,12 @@ The source photograph remains untouched. A successful result is exported as a
 JPEG with the original filename and routed to `Completed` or `NeedsReview`.
 Errors are recorded separately. The production prompt prioritizes architectural
 and material fidelity, preservation-only window handling, and protection of
-mirrors and reflections. V5.1 does not perform authentic window recovery or
+mirrors and reflections. V5.2 does not perform authentic window recovery or
 sky replacement: a white or blown window remains naturally bright and neutral.
+It classifies source exposure locally before prompting and routes statistically
+suspicious output to `NeedsReview`. Images Edit output is locally upscaled back
+to the original delivery dimensions with Lanczos resampling; this does not
+restore native source detail or claim native high-resolution AI generation.
 
 Each processed batch also creates local Before/After contact-sheet PDFs under
 `Completed/Batch Reviews/<run-id>/`. They are review documents only: they do
@@ -22,7 +26,7 @@ not alter JPEG outputs or make any API request.
 
 - Production source baseline before this documentation freeze:
   `e3f6d850cec7091149536f2a6b47236053afdc95` (V4.0 golden baseline)
-- Candidate badge: `Production v5.1` / `Prompt V5.1`
+- Candidate badge: `Production v5.2` / `Prompt V5.2`
 - Production model: `gpt-image-2`
 - Production endpoint: `/v1/images/edits`
 - API requests: one direct image-edit request per successful image; a genuine

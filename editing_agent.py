@@ -1,4 +1,4 @@
-"""Local, auditable editing-rule memory for MyEstatePics Direct V5.1.
+"""Local, auditable editing-rule memory for MyEstatePics Direct V5.2.
 
 This module deliberately has no OpenAI import and no network capability.  It
 only selects approved, relevant local rules and appends them beneath the

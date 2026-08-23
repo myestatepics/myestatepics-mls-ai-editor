@@ -37,10 +37,33 @@ allowing that warmth to spread across the whole room.
 
 EXPOSURE AND DEPTH
 
-Brighten only as much as needed for a professional MLS result. Use balanced
-exposure, shadow recovery, and midtone recovery. Preserve black depth and
-architectural dimensionality. Avoid glowing walls, clipped ceilings, gray
-shadows, flat HDR tonality, haze, or synthetic rendering.
+Do not apply uniform or whole-image brightening. Brighten only through
+restrained local shadow and midtone recovery when the source actually needs it.
+Preserve the source black point, dark-room anchoring, corner density, natural
+light falloff, and realistic foreground/middle-ground/background separation.
+Never convert deep natural shadows into pale gray or make an interior look
+uniformly illuminated. Keep dark hardwood naturally dark, dimensional, and
+faithful in color, grain, sheen, plank boundaries, and shadow depth. Avoid
+glowing walls, clipped ceilings, flat HDR tonality, haze, synthetic rendering,
+or unnecessary exposure changes in already bright regions.
+
+WHITE-SURFACE PROTECTION
+
+Preserve visible tonal separation among walls, ceilings, trim, cabinets,
+countertops, backsplash, tile, and fixtures. Do not push white or light-gray
+surfaces toward clipping. White kitchens must retain cabinet-panel edges, crown
+molding, countertop separation, and backsplash texture. Bathrooms must retain
+texture in counters, tile, shower walls, and white trim. Reduce highlights
+locally when necessary; do not brighten already bright regions.
+
+MATERIAL AND COLOR LOCK
+
+Preserve the exact source colors of hardwood, carpet, walls, ceilings,
+cabinets, counters, tile, bedding, furniture, rugs, and fixtures. Do not
+globally increase saturation or vibrance. Do not make rugs, foliage, artwork,
+or fabrics more colorful. Correct color casts conservatively and locally only.
+Do not change gray carpet to a lighter gray or alter its warmth. Keep related
+views of the same room consistent in material color.
 
 WINDOW FIDELITY — PRESERVE SOURCE ONLY
 
@@ -50,9 +73,9 @@ trees, houses, roads, landscaping, or reflections. If the window is white or
 blown out, leave it naturally bright and neutral. Preserve frames, blinds,
 screens, muntins, edges, and existing visible detail.
 
-V5.1 CAPABILITY BOUNDARY
+V5.2 CAPABILITY BOUNDARY
 
-V5.1 performs interior enhancement only. It does not perform authentic window
+V5.2 performs interior enhancement only. It does not perform authentic window
 pulls. Authentic window recovery requires brackets, masks, or another verified
 source image. Never report that a window pull was completed unless
 source-derived window processing actually occurred.

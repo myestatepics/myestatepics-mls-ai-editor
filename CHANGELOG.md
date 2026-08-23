@@ -4,6 +4,23 @@ This file records the production architecture history relevant to the frozen
 Direct release. The older engineering timeline remains available in
 [`docs/CHANGELOG.md`](docs/CHANGELOG.md).
 
+## V5.2 depth, color, and delivery-resolution safeguards
+
+- Adds source-pixel exposure classes: dark, moderately underexposed, already
+  balanced, and bright/high-key. The adaptive prompt now requests restrained
+  local shadow/midtone recovery only and avoids global brightening.
+- Strengthens prompt protection for black point, room depth, white-material
+  separation, dark hardwood, carpet, saturation, and material color.
+- Routes every deterministic `REVIEW` or `FAIL` signal to `NeedsReview`; the
+  signals are statistical safeguards, not proof of semantic fidelity.
+- Adds conservative checks for excess luminance/shadow lift, lifted blacks,
+  contrast loss, clipping, light-material separation loss, saturation, dark
+  material drift, edge changes, and possible bright-region exterior changes.
+- Returns the generated result locally to the original source dimensions with
+  Lanczos resampling and restrained post-upscale sharpening. The source size is
+  preserved for delivery, but the AI result still originates at the native
+  Images Edit resolution.
+
 ## V5.1 window-fidelity containment
 
 - Removes all window-pull, blue-sky, and exterior-reconstruction requests from
