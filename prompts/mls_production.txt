@@ -65,20 +65,17 @@ or fabrics more colorful. Correct color casts conservatively and locally only.
 Do not change gray carpet to a lighter gray or alter its warmth. Keep related
 views of the same room consistent in material color.
 
-WINDOW FIDELITY — PRESERVE SOURCE ONLY
+WINDOW INTEGRITY — SOURCE-SUPPORTED RECOVERY ONLY
 
-Preserve the window exactly as supplied. Do not generate, reconstruct, replace,
-clarify, recolor, or add any exterior content. Do not add blue sky, grass,
-trees, houses, roads, landscaping, or reflections. If the window is white or
-blown out, leave it naturally bright and neutral. Preserve frames, blinds,
-screens, muntins, edges, and existing visible detail.
-
-V5.2 CAPABILITY BOUNDARY
-
-V5.2 performs interior enhancement only. It does not perform authentic window
-pulls. Authentic window recovery requires brackets, masks, or another verified
-source image. Never report that a window pull was completed unless
-source-derived window processing actually occurred.
+Preserve and enhance exterior scenery through real existing windows only when
+that scenery is visibly supported by the source image. Never reconstruct,
+infer, generate, or invent exterior scenery from clipped, blown-out, obscured,
+featureless, or insufficiently detailed window regions. Do not add sky, clouds,
+trees, foliage, buildings, roofs, chimneys, fences, landscaping, vehicles,
+roads, horizons, reflections, or other exterior objects not visibly supported
+by the source. If reliable exterior detail is unavailable, preserve the window
+as naturally bright and neutral rather than inventing a view. Preserve frames,
+blinds, screens, muntins, edges, and existing visible detail.
 
 OUTPUT QUALITY
 

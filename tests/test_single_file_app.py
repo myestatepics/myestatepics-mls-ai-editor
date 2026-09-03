@@ -90,9 +90,9 @@ def test_mocked_end_to_end_preserves_filename_exif_and_quality_100(tmp_path, app
                 in kwargs["prompt"]
             )
             assert "Never treat mirrors, shower glass, reflections" in kwargs["prompt"]
-            assert "Preserve the window exactly as supplied." in kwargs["prompt"]
-            assert "Do not add blue sky, grass," in kwargs["prompt"]
-            assert "trees, houses, roads, landscaping" in kwargs["prompt"]
+            assert "Preserve and enhance exterior scenery through real existing windows" in kwargs["prompt"]
+            assert "Never reconstruct,\ninfer, generate, or invent exterior scenery" in kwargs["prompt"]
+            assert "naturally bright and neutral rather than inventing a view" in kwargs["prompt"]
             return response
 
     summary = app_module.process_batch(SimpleNamespace(images=Images()))
@@ -148,12 +148,10 @@ def test_external_production_prompt_preserves_foundation_and_adds_fidelity_rules
         in loaded_prompt
     )
     assert "Never treat mirrors, shower glass, reflections" in loaded_prompt
-    assert "WINDOW FIDELITY — PRESERVE SOURCE ONLY" in loaded_prompt
-    assert "Preserve the window exactly as supplied." in loaded_prompt
-    assert "If the window is white or\nblown out, leave it naturally bright and neutral." in loaded_prompt
-    assert "V5.2 CAPABILITY BOUNDARY" in loaded_prompt
-    assert "V5.2 performs interior enhancement only." in loaded_prompt
-    assert "It does not perform authentic window\npulls." in loaded_prompt
+    assert "WINDOW INTEGRITY — SOURCE-SUPPORTED RECOVERY ONLY" in loaded_prompt
+    assert "Preserve and enhance exterior scenery through real existing windows" in loaded_prompt
+    assert "Never reconstruct,\ninfer, generate, or invent exterior scenery" in loaded_prompt
+    assert "naturally bright and neutral rather than inventing a view" in loaded_prompt
     assert "Never create a fake window" in loaded_prompt
     assert "outdoor scenery inside a mirror" in loaded_prompt
     assert "HARDWOOD FLOOR CONTINUITY" in loaded_prompt
@@ -236,8 +234,166 @@ def test_v51_bright_source_colorization_is_reviewed_not_reported_as_window_recov
     output = Image.new("RGB", (120, 80), (30, 110, 255))
     result = app_module.compare_images(source, output, sharpened=False)
     assert result.status in {"REVIEW", "FAIL"}
-    assert any("Possible generated blue/green content" in message for message in result.messages)
+    assert any("Possible fabricated window/exterior detail" in message for message in result.messages)
     assert not any("window pull was completed" in message.casefold() for message in result.messages)
+
+
+def _window_scene_fixture(*, source_window, output_window, textured=False):
+    source = np.full((120, 180, 3), (65, 58, 50), dtype=np.uint8)
+    output = source.copy()
+    window_slice = np.s_[20:95, 35:150]
+    source[window_slice] = source_window
+    output[window_slice] = output_window
+    if textured:
+        y, x = np.indices((75, 115))
+        output[20:95, 35:150, 2] = np.clip(
+            output[20:95, 35:150, 2].astype(np.int16) + ((x + y) % 30), 0, 255
+        )
+        output[20:95, 35:150, 1] = np.clip(
+            output[20:95, 35:150, 1].astype(np.int16) + ((x * 3 + y) % 25), 0, 255
+        )
+    return source, output
+
+
+def test_v52_blown_low_information_window_with_new_scenery_routes_review(
+    tmp_path, app_module, monkeypatch
+):
+    source_arr, output_arr = _window_scene_fixture(
+        source_window=(250, 250, 250), output_window=(45, 135, 240), textured=True
+    )
+    source = tmp_path / "Mrinal-HAri-1stsept-9.jpg"
+    _save_rgb(source, source_arr)
+    # Isolate the window-fabrication gate from the independent sharpness gate.
+    monkeypatch.setattr(app_module, "SHARPNESS_FAIL_RATIO", 0.0)
+    monkeypatch.setattr(app_module, "SHARPNESS_REVIEW_RATIO", 0.0)
+
+    result = app_module.compare_images(source, Image.fromarray(output_arr), False)
+
+    assert result.status == "REVIEW"
+    assert any("Possible fabricated window/exterior detail" in message for message in result.messages)
+    assert any("low-information bright source region" in message for message in result.messages)
+
+
+def test_v52_blown_low_information_window_remaining_neutral_passes(tmp_path, app_module):
+    source_arr, output_arr = _window_scene_fixture(
+        source_window=(250, 250, 250), output_window=(244, 244, 244)
+    )
+    source = tmp_path / "Mrinal-HAri-1stsept-36.jpg"
+    _save_rgb(source, source_arr)
+
+    result = app_module.compare_images(source, Image.fromarray(output_arr), False)
+
+    assert result.status == "PASS"
+    assert not any("fabricated window/exterior" in message for message in result.messages)
+
+
+def test_v52_source_supported_exterior_improvement_passes(tmp_path, app_module):
+    source_arr, output_arr = _window_scene_fixture(
+        source_window=(65, 125, 180), output_window=(75, 145, 205), textured=True
+    )
+    # The source already contains blue/green exterior detail, so it is not a
+    # low-information near-white candidate region.
+    source_arr[35:80, 65:115, 1] = 150
+    output_arr[35:80, 65:115, 1] = 170
+    source = tmp_path / "real-exterior-detail.jpg"
+    _save_rgb(source, source_arr)
+
+    result = app_module.compare_images(source, Image.fromarray(output_arr), False)
+
+    assert result.status == "PASS"
+    assert not any("fabricated window/exterior" in message for message in result.messages)
+
+
+@pytest.mark.parametrize(
+    ("name", "source_color", "output_color"),
+    [
+        ("normal-dark-interior.jpg", (55, 47, 40), (105, 96, 88)),
+        ("white-balance-correction.jpg", (205, 185, 150), (205, 203, 198)),
+        ("material-preservation.jpg", (115, 85, 58), (122, 91, 62)),
+    ],
+)
+def test_v52_normal_mls_corrections_are_diagnostic_only(
+    tmp_path, app_module, name, source_color, output_color
+):
+    source_arr = np.full((120, 180, 3), source_color, dtype=np.uint8)
+    # Preserve enough source texture for the sharpness check to remain healthy.
+    source_arr[:, ::4] = np.clip(source_arr[:, ::4].astype(np.int16) - 10, 0, 255)
+    output_arr = np.full((120, 180, 3), output_color, dtype=np.uint8)
+    output_arr[:, ::4] = np.clip(output_arr[:, ::4].astype(np.int16) - 10, 0, 255)
+    source = tmp_path / name
+    _save_rgb(source, source_arr)
+
+    result = app_module.compare_images(source, Image.fromarray(output_arr), False)
+
+    assert result.status == "PASS"
+    assert not any("fabricated window/exterior" in message for message in result.messages)
+
+
+def test_v52_generic_luminance_signal_remains_diagnostic_only(tmp_path, app_module):
+    source_arr = np.full((120, 180, 3), (70, 65, 60), dtype=np.uint8)
+    source_arr[:, ::4] = 55
+    output_arr = np.full((120, 180, 3), (150, 145, 140), dtype=np.uint8)
+    output_arr[:, ::4] = 135
+    source = tmp_path / "diagnostic-luminance-only.jpg"
+    _save_rgb(source, source_arr)
+
+    result = app_module.compare_images(source, Image.fromarray(output_arr), False)
+
+    assert result.status == "PASS"
+    assert any("Excessive global luminance increase" in message for message in result.messages)
+
+
+def test_v52_active_needs_review_path_is_explicit(tmp_path, app_module):
+    configure_tmp(app_module, tmp_path)
+    assert app_module.active_needs_review_path_message() == (
+        f"NeedsReview destination: {app_module.REVIEW_DIR}"
+    )
+
+
+def test_v52_real_mrinal_window_verifier_regression(app_module):
+    """Keep the approved real BEFORE/AFTER verifier cases reproducible locally.
+
+    These are intentionally read-only production-image regressions.  They are
+    skipped on machines without the separately stored image set, rather than
+    copying customer images into the repository.
+    """
+    root = Path(
+        "/Users/subratmohapatra/Documents/MyestatePics/2026/Mrinal-HAri-1stsept"
+    )
+    before = root / "Mrinal-HAri-1stsept-LR"
+    after = root / "Mrinal-HAri-1stsept-Prefinal"
+    cases = {
+        "Mrinal-HAri-1stsept-2.jpg": "PASS",
+        "Mrinal-HAri-1stsept-4.jpg": "PASS",
+        "Mrinal-HAri-1stsept-6.jpg": "PASS",
+        "Mrinal-HAri-1stsept-9.jpg": "REVIEW",
+        "Mrinal-HAri-1stsept-36.jpg": "REVIEW",
+    }
+    if not all((before / name).is_file() and (after / name).is_file() for name in cases):
+        pytest.skip("Real Mrinal verifier regression images are not available")
+
+    for name, expected_status in cases.items():
+        with Image.open(after / name) as edited:
+            result = app_module.compare_images(before / name, edited.convert("RGB"), False)
+        assert result.status == expected_status, name
+
+
+def test_v52_real_lincoln_verifier_regression(app_module):
+    """All 14 existing Lincoln V5.2 edits remain out of NeedsReview."""
+    root = Path(
+        "/Users/subratmohapatra/Documents/MyestatePics/2026/New Folder With Items/"
+        "712 E Lincoln Madision Heights "
+    )
+    before = root / "712 E Lincoln Madision Heights -LR"
+    after = root / "712 E Lincoln Madision Heights -PreFinal"
+    names = sorted(path.name for path in before.glob("*.jpg"))
+    if len(names) != 14 or not all((after / name).is_file() for name in names):
+        pytest.skip("Real Lincoln V5.2 verifier regression images are not available")
+
+    for name in names:
+        with Image.open(after / name) as edited:
+            result = app_module.compare_images(before / name, edited.convert("RGB"), False)
+        assert result.status == "PASS", name
 
 
 def _save_rgb(path, array):

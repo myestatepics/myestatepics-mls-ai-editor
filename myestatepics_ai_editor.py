@@ -447,11 +447,14 @@ def chromaticity_shift(source_arr: np.ndarray, output_arr: np.ndarray) -> float:
     return float(np.linalg.norm(output_chroma - source_chroma))
 
 
-def normalized_edge_sharpness(arr: np.ndarray) -> float:
-    luminance = luminance_from_rgb(arr)
+def _edge_energy(luminance: np.ndarray) -> np.ndarray:
+    """Return a local edge-energy map for comparative review only."""
     gy, gx = np.gradient(luminance)
-    edge_energy = gx * gx + gy * gy
-    return float(np.mean(edge_energy))
+    return gx * gx + gy * gy
+
+
+def normalized_edge_sharpness(arr: np.ndarray) -> float:
+    return float(np.mean(_edge_energy(luminance_from_rgb(arr))))
 
 
 def saturation_from_rgb(arr: np.ndarray) -> np.ndarray:
@@ -464,56 +467,65 @@ def saturation_from_rgb(arr: np.ndarray) -> np.ndarray:
 def possible_bright_window_review_signals(
     source_arr: np.ndarray, output_arr: np.ndarray
 ) -> list[str]:
-    """Return conservative comparative review signals for bright source regions.
+    """Flag possible fabricated scenery in a low-information bright source region.
 
-    This is intentionally not a window detector: the application has no masks,
-    brackets, or local semantic model capable of locating a real window. It can
-    only flag material changes inside large, bright, near-neutral source regions
-    that may include a window, wall, cabinet, or counter.
+    The application has no window masks, brackets, or semantic exterior model.
+    This is a conservative review signal, not proof that an output contains a
+    fabricated view. It requires clipped, near-neutral source pixels plus
+    substantial new color or structure, so normal exposure, white-balance, and
+    material corrections do not become NeedsReview routing gates.
     """
     source_luminance = luminance_from_rgb(source_arr)
     source_saturation = saturation_from_rgb(source_arr)
+    output_luminance = luminance_from_rgb(output_arr)
     output_saturation = saturation_from_rgb(output_arr)
-    candidate_mask = (source_luminance >= 0.84) & (source_saturation <= 0.12)
+    candidate_mask = (source_luminance >= 0.92) & (source_saturation <= 0.06)
     if float(candidate_mask.mean()) < 0.005:
         return []
 
-    messages: list[str] = []
     saturation_increase = float(
         np.median(output_saturation[candidate_mask])
         - np.median(source_saturation[candidate_mask])
     )
     output_blue = output_arr[..., 2] - np.maximum(output_arr[..., 0], output_arr[..., 1])
     output_green = output_arr[..., 1] - np.maximum(output_arr[..., 0], output_arr[..., 2])
-    colorized_fraction = float(((output_blue > 0.10) | (output_green > 0.10))[candidate_mask].mean())
-    if colorized_fraction > 0.08:
-        messages.append(
-            "Possible generated blue/green content in a bright source region; "
-            "human review required (not a conclusive window detector)."
-        )
-    if saturation_increase > 0.16:
-        messages.append(
-            "Possible substantial saturation increase in a bright source region; "
-            "human review required (not a conclusive window detector)."
-        )
+    colorized_fraction = float(
+        ((output_blue > 0.10) | (output_green > 0.10))[candidate_mask].mean()
+    )
+    source_edge_energy = float(np.mean(_edge_energy(source_luminance)[candidate_mask]))
+    output_edge_energy = float(np.mean(_edge_energy(output_luminance)[candidate_mask]))
+    mean_rgb_delta = float(np.mean(np.abs(output_arr[candidate_mask] - source_arr[candidate_mask])))
+    strong_new_color = colorized_fraction >= 0.12 and saturation_increase >= 0.16
+    # Existing window detail can legitimately become sharper after a direct
+    # edit.  Structure alone is therefore not enough: require it to arrive
+    # with a substantial new exterior-like colour signal.
+    new_colored_structure = (
+        colorized_fraction >= 0.12
+        and output_edge_energy > max(source_edge_energy * 3.0, 0.0015)
+    )
+    # A second, independent review signal covers replacement/reconstruction
+    # that stays near-neutral: a sufficiently large, formerly low-information
+    # bright region must have changed materially at pixel level.  The area and
+    # delta limits deliberately exclude normal exposure and window recovery.
+    neutral_reconstruction = (
+        float(candidate_mask.mean()) >= 0.008
+        and mean_rgb_delta >= 0.16
+    )
 
-    source_edge_energy = normalized_edge_sharpness(source_arr)
-    output_edge_energy = normalized_edge_sharpness(output_arr)
-    if output_edge_energy > max(source_edge_energy * 2.4, 0.002):
-        messages.append(
-            "Possible new high-frequency structure or edge change; human review "
-            "required (not a conclusive exterior-object detector)."
-        )
-
-    output_luminance = luminance_from_rgb(output_arr)
-    output_neutral_mask = (output_luminance >= 0.84) & (output_saturation <= 0.12)
-    overlap = float((candidate_mask & output_neutral_mask).sum()) / max(1, int(candidate_mask.sum()))
-    if overlap < 0.35:
-        messages.append(
-            "Possible bright-region boundary or frame change; human review required "
-            "because real window regions are not locally detected."
-        )
-    return messages
+    if strong_new_color or new_colored_structure or neutral_reconstruction:
+        details: list[str] = []
+        if strong_new_color:
+            details.append("new blue/green or saturated color")
+        if new_colored_structure:
+            details.append("new edge/texture structure")
+        if neutral_reconstruction:
+            details.append("substantial neutral reconstruction")
+        return [
+            "Possible fabricated window/exterior detail: "
+            f"{', '.join(details)} appeared in a low-information bright source "
+            "region. Human review required; no window mask is available."
+        ]
+    return []
 
 
 def analyze_white_balance(arr: np.ndarray) -> dict[str, Any]:
@@ -942,11 +954,12 @@ def compare_images(
     output_image: Image.Image,
     sharpened: bool,
 ) -> VerificationResult:
-    """Apply conservative statistical review gates to source/output pixels.
+    """Apply narrow integrity routing while retaining diagnostic measurements.
 
-    These checks are intentionally not semantic proof of material, window, or
-    architectural fidelity. They identify suspicious global or regional drift
-    and route those outputs to human review rather than reporting MLS approval.
+    Normal MLS exposure, white-balance, contrast, and material adjustments are
+    retained as diagnostics but are not quarantine criteria. NeedsReview is
+    reserved for sharpness loss or a possible new scene in a low-information
+    bright source region; neither signal is semantic proof.
     """
     with Image.open(input_file) as source:
         source_arr = image_to_rgb_array(source, NORMALIZED_LONG_EDGE)
@@ -1124,6 +1137,21 @@ def compare_images(
     for signal in possible_bright_window_review_signals(source_arr, output_arr):
         status = "REVIEW" if status == "PASS" else status
         messages.append(signal)
+
+    # Retain the existing measurements for diagnostics and logs, but route only
+    # meaningful output-integrity risks. Normal MLS correction must not become
+    # NeedsReview merely because the edited image differs from its source.
+    routing_review = any(
+        message.startswith(
+            (
+                "Moderate normalized sharpness loss:",
+                "Possible fabricated window/exterior detail:",
+            )
+        )
+        for message in messages
+    )
+    if status != "FAIL":
+        status = "REVIEW" if routing_review else "PASS"
 
     if not messages:
         messages.append("Deterministic checks passed.")
@@ -2446,6 +2474,11 @@ def selection_status(input_file: Path) -> str:
     return "Selected — ready"
 
 
+def active_needs_review_path_message() -> str:
+    """Make the current quarantine destination explicit for GUI diagnostics."""
+    return f"NeedsReview destination: {REVIEW_DIR}"
+
+
 def pending_images(selected_files: list[Path] | None = None) -> tuple[list[Path], int]:
     INPUT_DIR.mkdir(parents=True, exist_ok=True)
     if selected_files:
@@ -3616,10 +3649,14 @@ def launch_gui() -> int:
             self.scan_status = QLabel()
             self.scan_status.setWordWrap(True)
             job_layout.addWidget(self.scan_status, 6, 0, 1, 4)
+            self.active_review_path = QLabel(active_needs_review_path_message())
+            self.active_review_path.setObjectName("appSubtitle")
+            self.active_review_path.setWordWrap(True)
+            job_layout.addWidget(self.active_review_path, 7, 0, 1, 4)
             self.folder_validation = QLabel()
             self.folder_validation.setWordWrap(True)
             self.folder_validation.setStyleSheet("color: #b42318;")
-            job_layout.addWidget(self.folder_validation, 7, 0, 1, 4)
+            job_layout.addWidget(self.folder_validation, 8, 0, 1, 4)
             layout.addWidget(job_group)
 
             self.advanced_group = QGroupBox("Advanced Folders")
@@ -4032,6 +4069,7 @@ def launch_gui() -> int:
 
         def update_job_summary(self):
             self.apply_paths()
+            self.active_review_path.setText(active_needs_review_path_message())
             valid, message = validate_folder_configuration(
                 *self.folder_paths[:4]
             )
