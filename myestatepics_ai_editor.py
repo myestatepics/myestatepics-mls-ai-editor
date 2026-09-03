@@ -1291,9 +1291,11 @@ def infer_implicit_label(filename: str, system_decision: str) -> str:
     No manual labeling required.
 
     - A file in Completed is treated as ACCEPTED.
-    - A file in NeedsReview remains UNRESOLVED until the user naturally moves it.
+    - A REVIEW decision remains UNRESOLVED until the user explicitly accepts it.
     - Failed files are FAILED.
     """
+    if system_decision == "REVIEW":
+        return "UNRESOLVED"
     if (OUTPUT_DIR / filename).exists():
         return "ACCEPTED"
     if (REVIEW_DIR / filename).exists():
@@ -1305,36 +1307,65 @@ def infer_implicit_label(filename: str, system_decision: str) -> str:
 
 def reconcile_history_labels() -> None:
     """
-    Learn from normal folder actions without asking for manual labels.
+    Review state is explicit metadata, not a physical-folder inference.
 
-    If a previously reviewed image is later moved into Completed, all matching
-    unresolved records are automatically updated to ACCEPTED.
+    A REVIEW JPEG remains in the user-selected Completed/PreFinal folder. Do
+    not silently clear its review flag merely because the output exists.
     """
-    if not HISTORY_DB.exists():
-        return
+    return
 
+
+def has_unresolved_review_state(filename: str) -> bool:
+    """Return whether the latest recorded result is an unresolved review."""
+    if not HISTORY_DB.exists():
+        return False
     with sqlite3.connect(HISTORY_DB) as connection:
-        unresolved = connection.execute(
+        record = connection.execute(
             """
-            SELECT DISTINCT filename
+            SELECT system_decision, implicit_final_label
             FROM image_history
-            WHERE implicit_final_label = 'UNRESOLVED'
+            WHERE filename = ?
+            ORDER BY id DESC LIMIT 1
+            """,
+            (filename,),
+        ).fetchone()
+    return bool(record and record[0] == "REVIEW" and record[1] == "UNRESOLVED")
+
+
+def unresolved_review_filenames() -> set[str]:
+    """Return latest unresolved review records for Review Results ordering."""
+    if not HISTORY_DB.exists():
+        return set()
+    with sqlite3.connect(HISTORY_DB) as connection:
+        records = connection.execute(
+            """
+            SELECT filename
+            FROM image_history
+            WHERE id IN (
+                SELECT MAX(id) FROM image_history GROUP BY filename
+            )
+              AND system_decision = 'REVIEW'
+              AND implicit_final_label = 'UNRESOLVED'
             """
         ).fetchall()
+    return {record[0] for record in records}
 
-        for (filename,) in unresolved:
-            if (OUTPUT_DIR / filename).exists():
-                connection.execute(
-                    """
-                    UPDATE image_history
-                    SET implicit_final_label = 'ACCEPTED'
-                    WHERE filename = ?
-                      AND implicit_final_label = 'UNRESOLVED'
-                    """,
-                    (filename,),
-                )
 
-        connection.commit()
+def review_result_files() -> list[Path]:
+    """List review-flagged PreFinal outputs first, then other existing results."""
+    legacy_review_files = sorted(
+        path for path in REVIEW_DIR.glob("*") if path.suffix.lower() in SUPPORTED_EXTENSIONS
+    )
+    legacy_names = {path.name for path in legacy_review_files}
+    review_names = unresolved_review_filenames()
+    completed_files = sorted(
+        path for path in OUTPUT_DIR.glob("*") if path.suffix.lower() in SUPPORTED_EXTENSIONS
+    )
+    flagged_outputs = [
+        path for path in completed_files if path.name in review_names and path.name not in legacy_names
+    ]
+    other_outputs = [path for path in completed_files if path not in flagged_outputs]
+    return legacy_review_files + flagged_outputs + other_outputs
 
 
 def append_history(
@@ -1691,11 +1722,11 @@ def main() -> None:
                 input_file,
             )
 
+            # Review is metadata; successful outputs remain in Completed/PreFinal.
+            destination_dir = OUTPUT_DIR
             if verification.status == "PASS":
-                destination_dir = OUTPUT_DIR
                 success += 1
             else:
-                destination_dir = REVIEW_DIR
                 review_count += 1
 
             destination_file = destination_dir / input_file.name
@@ -2461,6 +2492,8 @@ def existing_output_destination(filename: str) -> str | None:
         (ERROR_DIR, "Error"),
     ):
         if (directory / filename).is_file():
+            if directory == OUTPUT_DIR and has_unresolved_review_state(filename):
+                return "NeedsReview"
             return destination
     return None
 
@@ -2694,15 +2727,17 @@ def process_batch(
                 review_reasons.append(premium_finish_error)
             needs_review_reason = " | ".join(dict.fromkeys(review_reasons))
             routing_status = "REVIEW" if needs_review_reason else "PASS"
-            destination = REVIEW_DIR if needs_review_reason else OUTPUT_DIR
+            # Review is persisted metadata. A successfully generated JPEG is
+            # always delivered once to the user-selected Completed/PreFinal folder.
+            destination = OUTPUT_DIR
             filesystem_started = time.perf_counter()
             _atomic_write(destination / input_file.name, jpeg_bytes)
             review_pdf_outputs[input_file.resolve()] = destination / input_file.name
             timings["filesystem_write_seconds"] = time.perf_counter() - filesystem_started
-            if destination == OUTPUT_DIR:
-                summary.completed += 1
-            else:
+            if routing_status == "REVIEW":
                 summary.review += 1
+            else:
+                summary.completed += 1
             if any((usage.input_tokens, usage.output_tokens, usage.total_tokens)):
                 summary.usage_responses += 1
             summary.input_tokens += usage.input_tokens or 0
@@ -2928,7 +2963,9 @@ def process_demo_batch(
             review_pdf_outputs[input_file.resolve()] = destination / input_file.name
             summary.completed += 1
         elif status == "REVIEW":
-            destination = REVIEW_DIR
+            # Demo mode follows the same review-state routing contract without
+            # creating a second successful JPEG in its hidden NeedsReview folder.
+            destination = OUTPUT_DIR
             needs_review_reason = "DEMO simulated NeedsReview result."
             message = needs_review_reason
             _atomic_write(destination / input_file.name, input_file.read_bytes())
@@ -2989,7 +3026,14 @@ def process_demo_batch(
 
 
 def accept_review_output(filename: str) -> Path:
-    """Move a reviewed output into the active Completed folder and update history."""
+    """Accept a review flag without moving a current PreFinal JPEG."""
+    current_output = OUTPUT_DIR / filename
+    if current_output.is_file():
+        set_review_label(filename, "ACCEPTED")
+        return current_output
+
+    # Preserve a recovery path for legacy builds that physically stored review
+    # JPEGs in NeedsReview. New successful REVIEW outputs never take this path.
     source = REVIEW_DIR / filename
     destination = OUTPUT_DIR / filename
     if destination.exists():
@@ -3000,15 +3044,12 @@ def accept_review_output(filename: str) -> Path:
 
 
 def move_output_to_review(filename: str) -> Path:
-    """Move an existing Completed output into the active NeedsReview folder."""
+    """Mark an existing PreFinal JPEG for review without moving or copying it."""
     source = OUTPUT_DIR / filename
-    destination = REVIEW_DIR / filename
-    if destination.exists():
-        raise FileExistsError(f"NeedsReview already contains {filename}.")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    source.replace(destination)
-    set_latest_history_label(filename, "UNRESOLVED")
-    return destination
+    if not source.is_file():
+        raise FileNotFoundError(f"Completed does not contain {filename}.")
+    mark_latest_output_for_review(filename)
+    return source
 
 
 def delete_active_output(filename: str) -> None:
@@ -3047,6 +3088,26 @@ def set_latest_history_label(filename: str, label: str) -> None:
             )
             """,
             (label, filename),
+        )
+        connection.commit()
+
+
+def mark_latest_output_for_review(filename: str) -> None:
+    """Persist a manual Review Results flag without relocating the JPEG."""
+    if not HISTORY_DB.exists():
+        return
+    with sqlite3.connect(HISTORY_DB) as connection:
+        connection.execute(
+            """
+            UPDATE image_history
+            SET system_decision = 'REVIEW', implicit_final_label = 'UNRESOLVED'
+            WHERE id = (
+                SELECT id FROM image_history
+                WHERE filename = ?
+                ORDER BY id DESC LIMIT 1
+            )
+            """,
+            (filename,),
         )
         connection.commit()
 
@@ -3299,19 +3360,7 @@ def launch_gui() -> int:
             )
 
         def refresh_files(self):
-            review_files = sorted(
-                path
-                for path in REVIEW_DIR.glob("*")
-                if path.suffix.lower() in SUPPORTED_EXTENSIONS
-            )
-            review_names = {path.name for path in review_files}
-            completed_files = sorted(
-                path
-                for path in OUTPUT_DIR.glob("*")
-                if path.suffix.lower() in SUPPORTED_EXTENSIONS
-                and path.name not in review_names
-            )
-            self.files = review_files + completed_files
+            self.files = review_result_files()
             self.index = min(self.index, max(0, len(self.files) - 1))
             self.show_current()
 
@@ -3379,7 +3428,7 @@ def launch_gui() -> int:
                 return
             try:
                 move_output_to_review(source.name)
-            except FileExistsError as error:
+            except (FileExistsError, FileNotFoundError) as error:
                 QMessageBox.warning(self, "Existing file", str(error))
                 return
             self.refresh_files()

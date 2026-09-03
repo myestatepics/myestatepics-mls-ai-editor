@@ -101,6 +101,8 @@ def test_mocked_end_to_end_preserves_filename_exif_and_quality_100(tmp_path, app
     assert summary.completed == 1
     output = app_module.OUTPUT_DIR / source.name
     assert output.exists()
+    assert not (app_module.REVIEW_DIR / source.name).exists()
+    assert app_module.selection_status(source) == "Already exists in Completed"
     assert source.exists()
     with Image.open(output) as result:
         assert result.format == "JPEG"
@@ -174,10 +176,12 @@ def test_v51_hardwood_glare_clarification_and_window_containment_are_preserved(
         "\n\nWALL AND CEILING CONTINUITY", 1
     )[0]
     assert "Preserve V4.0 hardwood exactly as the default behavior." in section
-    assert "Substantially reduce large, broad, milky white or bluish, window-shaped" in section
-    assert "hardwood—its color, grain, plank boundaries, and local contrast—is visually\nprimary" in section
-    assert "Do not treat a genuine geometric directional\ndirect-sunlight patch" in section
-    assert "small or subtle natural reflections, realistic moderate sheen" in section
+    assert "Strongly and substantially suppress large, broad, milky white or bluish," in section
+    assert "Do not merely soften this dominant glare" in section
+    assert "The natural hardwood must be visually primary before\nthe reflection." in section
+    assert "directional direct-sunlight\npatch as bad reflection" in section
+    assert "small or subtle natural reflections" in section
+    assert "Preserve shiny hardwood,\nnatural gloss" in section
     assert "WINDOW PULL — V5.0 PRODUCTION BEHAVIOR" in prompt
     assert "Recover crisp, realistic exterior detail through confirmed real windows." in prompt
     assert "Exterior detail should be crisp, clear, and naturally contrasted—not soft," in prompt
@@ -1106,7 +1110,17 @@ def test_premium_finish_failure_never_retries_successful_api_response(
     assert len(calls) == 1
     assert summary.api_calls == 1
     assert summary.review == 1
-    assert (app_module.REVIEW_DIR / source.name).exists()
+    assert (app_module.OUTPUT_DIR / source.name).exists()
+    assert not (app_module.REVIEW_DIR / source.name).exists()
+    assert app_module.selection_status(source) == "Already exists in NeedsReview"
+    with sqlite3.connect(app_module.HISTORY_DB) as connection:
+        decision, label, message = connection.execute(
+            """SELECT system_decision, implicit_final_label, message
+            FROM image_history WHERE filename = ? ORDER BY id DESC LIMIT 1""",
+            (source.name,),
+        ).fetchone()
+    assert (decision, label) == ("REVIEW", "UNRESOLVED")
+    assert "Premium Finish failed locally" in message
 
 
 def test_review_actions_move_accept_and_delete_outputs(tmp_path, app_module):
@@ -1114,19 +1128,62 @@ def test_review_actions_move_accept_and_delete_outputs(tmp_path, app_module):
     app_module.initialize_history_db()
     completed = app_module.OUTPUT_DIR / "room.jpg"
     completed.write_bytes(b"result")
+    with sqlite3.connect(app_module.HISTORY_DB) as connection:
+        connection.execute(
+            """INSERT INTO image_history (
+                run_id, processed_at, filename, program_version, prompt_version,
+                model, quality, system_decision, implicit_final_label, destination
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ("run", "now", completed.name, "6.0", "V6.0", "DEMO", "low", "PASS", "ACCEPTED", str(app_module.OUTPUT_DIR)),
+        )
+        connection.commit()
 
     moved = app_module.move_output_to_review(completed.name)
-    assert moved == app_module.REVIEW_DIR / completed.name
+    assert moved == completed
     assert moved.exists()
-    assert not completed.exists()
+    assert not (app_module.REVIEW_DIR / completed.name).exists()
+    source = app_module.INPUT_DIR / completed.name
+    source.write_bytes(b"original")
+    assert app_module.selection_status(source) == "Already exists in NeedsReview"
+    assert app_module.review_result_files()[0] == completed
 
     accepted = app_module.accept_review_output(moved.name)
     assert accepted == completed
     assert completed.exists()
-    assert not moved.exists()
+    assert not (app_module.REVIEW_DIR / completed.name).exists()
 
     app_module.delete_active_output(completed.name)
     assert not completed.exists()
+
+
+def test_review_state_keeps_one_prefinal_jpeg_and_survives_rescan(tmp_path, app_module):
+    configure_tmp(app_module, tmp_path)
+    app_module.initialize_history_db()
+    source = app_module.INPUT_DIR / "reviewed.jpg"
+    textured_image().save(source, format="JPEG", quality=95)
+    output = app_module.OUTPUT_DIR / source.name
+    output.write_bytes(source.read_bytes())
+    reason = "Possible fabricated window/exterior detail: fixture review signal."
+    with sqlite3.connect(app_module.HISTORY_DB) as connection:
+        connection.execute(
+            """INSERT INTO image_history (
+                run_id, processed_at, filename, program_version, prompt_version,
+                model, quality, system_decision, implicit_final_label, destination, message
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ("run", "now", source.name, "6.0", "V6.0", "gpt-image-2", "medium", "REVIEW", "UNRESOLVED", str(app_module.OUTPUT_DIR), reason),
+        )
+        connection.commit()
+
+    assert app_module.selection_status(source) == "Already exists in NeedsReview"
+    assert app_module.pending_images([source]) == ([], 1)
+    assert app_module.review_result_files()[0] == output
+    assert output.exists()
+    assert not (app_module.REVIEW_DIR / source.name).exists()
+
+    app_module.reconcile_history_labels()
+    assert app_module.selection_status(source) == "Already exists in NeedsReview"
+    assert app_module.accept_review_output(source.name) == output
+    assert app_module.selection_status(source) == "Already exists in Completed"
 
 
 def test_shell_environment_key_takes_precedence(tmp_path, monkeypatch, app_module):
@@ -1494,7 +1551,7 @@ def test_real_and_demo_output_skip_states_are_isolated(tmp_path, app_module):
     assert demo_output.exists()
 
 
-def test_any_v52_verifier_review_or_failure_routes_to_needs_review(
+def test_any_v52_verifier_review_or_failure_is_flagged_in_prefinal(
     tmp_path, monkeypatch, app_module
 ):
     configure_tmp(app_module, tmp_path)
@@ -1516,7 +1573,9 @@ def test_any_v52_verifier_review_or_failure_routes_to_needs_review(
     summary = app_module.process_batch(SimpleNamespace(images=Images()), quality="low")
     assert summary.completed == 0
     assert summary.review == 1
-    assert (app_module.REVIEW_DIR / "advisory.jpg").exists()
+    assert (app_module.OUTPUT_DIR / "advisory.jpg").exists()
+    assert not (app_module.REVIEW_DIR / "advisory.jpg").exists()
+    assert app_module.selection_status(app_module.INPUT_DIR / "advisory.jpg") == "Already exists in NeedsReview"
 
     failure = app_module.VerificationResult(
         "FAIL", ["Severe normalized sharpness loss."], 0.2, 0.1, 0.01, 0.0, 0.0, False
@@ -1527,7 +1586,8 @@ def test_any_v52_verifier_review_or_failure_routes_to_needs_review(
         SimpleNamespace(images=Images()), selected_files=[app_module.INPUT_DIR / "failure.jpg"]
     )
     assert summary.review == 1
-    assert (app_module.REVIEW_DIR / "failure.jpg").exists()
+    assert (app_module.OUTPUT_DIR / "failure.jpg").exists()
+    assert not (app_module.REVIEW_DIR / "failure.jpg").exists()
     with summary.log_path.open(newline="", encoding="utf-8") as log_file:
         row = list(csv.DictReader(log_file))[-1]
     assert row["needs_review_reason"] == "Severe normalized sharpness loss."
@@ -1598,7 +1658,8 @@ def test_demo_include_error_routes_pass_review_and_error_only_under_demo(
 
     assert (summary.completed, summary.review, summary.failed) == (1, 1, 1)
     assert (demo_root / "Completed" / "a.jpg").exists()
-    assert (demo_root / "NeedsReview" / "b.jpg").exists()
+    assert (demo_root / "Completed" / "b.jpg").exists()
+    assert not (demo_root / "NeedsReview" / "b.jpg").exists()
     assert (demo_root / "Error" / "c_error.txt").exists()
     assert summary.fallback_cost == 0
     for path in demo_root.rglob("*"):
@@ -1613,13 +1674,13 @@ def test_accept_moves_demo_review_output_and_updates_demo_history(tmp_path, app_
         result_mode="Some Need Review", delay_seconds=0
     )
     assert summary.review == 1
-    review_file = demo_root / "NeedsReview" / "review.jpg"
+    review_file = demo_root / "Completed" / "review.jpg"
     assert review_file.exists()
 
     destination = app_module.accept_review_output("review.jpg")
     assert destination == demo_root / "Completed" / "review.jpg"
     assert destination.exists()
-    assert not review_file.exists()
+    assert review_file.exists()
     with sqlite3.connect(demo_root / "Data" / "image_history.sqlite3") as connection:
         label = connection.execute(
             "SELECT implicit_final_label FROM image_history WHERE filename = ?",

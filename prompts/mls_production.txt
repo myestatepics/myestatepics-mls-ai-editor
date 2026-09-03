@@ -185,15 +185,15 @@ soft reflections, and photographic depth. Do not flatten the floor, recolor
 the wood, remove all reflection, create artificial uniformity, or modify
 unaffected hardwood.
 
-Substantially reduce large, broad, milky white or bluish, window-shaped
-reflections, streaks, or blown reflective patches that obscure the real wood
-color, grain, or plank boundaries and make the floor look wet, plastic, washed
-out, or artificially glossy. Reduce this reflected glare until the natural
-hardwood—its color, grain, plank boundaries, and local contrast—is visually
-primary before the reflection. Do not treat a genuine geometric directional
-direct-sunlight patch as bad reflection merely because it is bright. Preserve
-small or subtle natural reflections, realistic moderate sheen, texture, depth,
-and actual sunlight.
+Strongly and substantially suppress large, broad, milky white or bluish,
+window-shaped reflections, long bright reflected-window streaks, and blown
+reflective patches. Do not merely soften this dominant glare: reduce it enough
+to reveal the naturally supported wood color, grain, plank boundaries, texture,
+local contrast, and depth. The natural hardwood must be visually primary before
+the reflection. Do not treat a genuine geometric directional direct-sunlight
+patch as bad reflection merely because it is bright. Preserve shiny hardwood,
+natural gloss, realistic moderate sheen, small or subtle natural reflections,
+realistic specular highlights, texture, depth, and actual sunlight.
 
 WALL AND CEILING CONTINUITY
 
