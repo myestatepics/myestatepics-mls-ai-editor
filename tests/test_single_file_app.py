@@ -174,10 +174,10 @@ def test_v51_hardwood_glare_clarification_and_window_containment_are_preserved(
         "\n\nWALL AND CEILING CONTINUITY", 1
     )[0]
     assert "Preserve V4.0 hardwood exactly as the default behavior." in section
-    assert "Strongly reduce only broad, milky white or bluish, window-shaped reflections" in section
-    assert "make the floor look wet, plastic, washed out, or\nartificially glossy" in section
-    assert "Do not treat a genuine directional direct-sunlight patch" in section
-    assert "Preserve natural moderate sheen,\nrealistic reflections" in section
+    assert "Substantially reduce large, broad, milky white or bluish, window-shaped" in section
+    assert "hardwood—its color, grain, plank boundaries, and local contrast—is visually\nprimary" in section
+    assert "Do not treat a genuine geometric directional\ndirect-sunlight patch" in section
+    assert "small or subtle natural reflections, realistic moderate sheen" in section
     assert "WINDOW PULL — V5.0 PRODUCTION BEHAVIOR" in prompt
     assert "Recover crisp, realistic exterior detail through confirmed real windows." in prompt
     assert "Exterior detail should be crisp, clear, and naturally contrasted—not soft," in prompt
