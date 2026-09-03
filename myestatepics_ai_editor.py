@@ -1315,57 +1315,66 @@ def reconcile_history_labels() -> None:
     return
 
 
-def has_unresolved_review_state(filename: str) -> bool:
-    """Return whether the latest recorded result is an unresolved review."""
+def history_destination_matches(destination: str, output_dir: Path) -> bool:
+    """Compare persisted output folders without treating filenames as global IDs."""
+    try:
+        return Path(destination).expanduser().resolve() == Path(output_dir).expanduser().resolve()
+    except (OSError, ValueError):
+        return False
+
+
+def has_unresolved_review_state(filename: str, output_dir: Path) -> bool:
+    """Return the latest unresolved review state for this exact output folder."""
     if not HISTORY_DB.exists():
         return False
     with sqlite3.connect(HISTORY_DB) as connection:
-        record = connection.execute(
+        records = connection.execute(
             """
-            SELECT system_decision, implicit_final_label
+            SELECT system_decision, implicit_final_label, destination
             FROM image_history
             WHERE filename = ?
-            ORDER BY id DESC LIMIT 1
+            ORDER BY id DESC
             """,
             (filename,),
-        ).fetchone()
-    return bool(record and record[0] == "REVIEW" and record[1] == "UNRESOLVED")
+        ).fetchall()
+    for record in records:
+        if history_destination_matches(record[2], output_dir):
+            return record[0] == "REVIEW" and record[1] == "UNRESOLVED"
+    return False
 
 
-def unresolved_review_filenames() -> set[str]:
-    """Return latest unresolved review records for Review Results ordering."""
+def unresolved_review_filenames(output_dir: Path) -> set[str]:
+    """Return unresolved review records scoped to the current output folder."""
     if not HISTORY_DB.exists():
         return set()
     with sqlite3.connect(HISTORY_DB) as connection:
         records = connection.execute(
             """
-            SELECT filename
+            SELECT filename, system_decision, implicit_final_label, destination
             FROM image_history
-            WHERE id IN (
-                SELECT MAX(id) FROM image_history GROUP BY filename
-            )
-              AND system_decision = 'REVIEW'
-              AND implicit_final_label = 'UNRESOLVED'
+            ORDER BY filename, id DESC
             """
         ).fetchall()
-    return {record[0] for record in records}
+    seen: set[str] = set()
+    unresolved: set[str] = set()
+    for filename, decision, label, destination in records:
+        if filename in seen or not history_destination_matches(destination, output_dir):
+            continue
+        seen.add(filename)
+        if decision == "REVIEW" and label == "UNRESOLVED":
+            unresolved.add(filename)
+    return unresolved
 
 
 def review_result_files() -> list[Path]:
     """List review-flagged PreFinal outputs first, then other existing results."""
-    legacy_review_files = sorted(
-        path for path in REVIEW_DIR.glob("*") if path.suffix.lower() in SUPPORTED_EXTENSIONS
-    )
-    legacy_names = {path.name for path in legacy_review_files}
-    review_names = unresolved_review_filenames()
+    review_names = unresolved_review_filenames(OUTPUT_DIR)
     completed_files = sorted(
         path for path in OUTPUT_DIR.glob("*") if path.suffix.lower() in SUPPORTED_EXTENSIONS
     )
-    flagged_outputs = [
-        path for path in completed_files if path.name in review_names and path.name not in legacy_names
-    ]
+    flagged_outputs = [path for path in completed_files if path.name in review_names]
     other_outputs = [path for path in completed_files if path not in flagged_outputs]
-    return legacy_review_files + flagged_outputs + other_outputs
+    return flagged_outputs + other_outputs
 
 
 def append_history(
@@ -2485,16 +2494,11 @@ def configure_demo_runtime_paths(input_dir: Path) -> None:
 
 
 def existing_output_destination(filename: str) -> str | None:
-    """Return the current output folder containing this filename, without history."""
-    for directory, destination in (
-        (OUTPUT_DIR, "Completed"),
-        (REVIEW_DIR, "NeedsReview"),
-        (ERROR_DIR, "Error"),
-    ):
-        if (directory / filename).is_file():
-            if directory == OUTPUT_DIR and has_unresolved_review_state(filename):
-                return "NeedsReview"
-            return destination
+    """Return the status of the expected JPEG in the current PreFinal folder."""
+    if (OUTPUT_DIR / filename).is_file():
+        if has_unresolved_review_state(filename, OUTPUT_DIR):
+            return "NeedsReview"
+        return "Completed"
     return None
 
 

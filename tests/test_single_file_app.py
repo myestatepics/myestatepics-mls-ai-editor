@@ -1440,27 +1440,127 @@ def test_selected_file_processing_and_empty_selection_processes_all(tmp_path, ap
     assert calls == ["one.jpg", "three.jpg"]
 
 
-@pytest.mark.parametrize(
-    ("directory_name", "expected_status"),
-    [
-        ("OUTPUT_DIR", "Already exists in Completed"),
-        ("REVIEW_DIR", "Already exists in NeedsReview"),
-        ("ERROR_DIR", "Already exists in Error"),
-    ],
-)
-def test_current_output_file_skips_source_by_actual_destination(
-    tmp_path, app_module, directory_name, expected_status
-):
+def test_current_prefinal_output_skips_source_by_actual_destination(tmp_path, app_module):
     configure_tmp(app_module, tmp_path)
     source = app_module.INPUT_DIR / "same-name.jpg"
     textured_image().save(source, format="JPEG", quality=95)
-    destination = getattr(app_module, directory_name) / source.name
+    destination = app_module.OUTPUT_DIR / source.name
     destination.write_bytes(source.read_bytes())
 
     pending, skipped = app_module.pending_images([source])
     assert pending == []
     assert skipped == 1
-    assert app_module.selection_status(source) == expected_status
+    assert app_module.selection_status(source) == "Already exists in Completed"
+
+
+def _insert_output_state(module, filename, output_dir, decision, label):
+    module.initialize_history_db()
+    with sqlite3.connect(module.HISTORY_DB) as connection:
+        connection.execute(
+            """INSERT INTO image_history (
+                run_id, processed_at, filename, program_version, prompt_version,
+                model, quality, system_decision, implicit_final_label, destination
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                "run",
+                "now",
+                filename,
+                "6.0",
+                "V6.0",
+                "gpt-image-2",
+                "medium",
+                decision,
+                label,
+                str(output_dir),
+            ),
+        )
+        connection.commit()
+
+
+def _configure_output_folder(module, tmp_path, output_name):
+    input_dir = tmp_path / "Incoming"
+    review_dir = tmp_path / "runtime" / "NeedsReview"
+    error_dir = tmp_path / "runtime" / "Error"
+    log_dir = tmp_path / "runtime" / "Logs"
+    module.configure_runtime_paths(input_dir, tmp_path / output_name, review_dir, error_dir, log_dir)
+    for directory in (module.INPUT_DIR, module.OUTPUT_DIR, module.REVIEW_DIR, module.ERROR_DIR, module.LOG_DIR, module.DATA_DIR):
+        directory.mkdir(parents=True, exist_ok=True)
+
+
+def test_stale_review_record_in_other_output_folder_does_not_block(tmp_path, app_module):
+    _configure_output_folder(app_module, tmp_path, "PreFinal-A")
+    source = app_module.INPUT_DIR / "x.jpg"
+    textured_image().save(source, format="JPEG", quality=95)
+    _insert_output_state(app_module, source.name, app_module.OUTPUT_DIR, "REVIEW", "UNRESOLVED")
+
+    _configure_output_folder(app_module, tmp_path, "PreFinal-B")
+    assert app_module.selection_status(source) == "Selected — ready"
+    assert app_module.pending_images([source]) == ([source.resolve()], 0)
+
+
+def test_stale_pass_record_in_other_output_folder_does_not_block(tmp_path, app_module):
+    _configure_output_folder(app_module, tmp_path, "PreFinal-A")
+    source = app_module.INPUT_DIR / "x.jpg"
+    textured_image().save(source, format="JPEG", quality=95)
+    _insert_output_state(app_module, source.name, app_module.OUTPUT_DIR, "PASS", "ACCEPTED")
+
+    _configure_output_folder(app_module, tmp_path, "PreFinal-B")
+    assert app_module.selection_status(source) == "Selected — ready"
+    assert app_module.pending_images([source]) == ([source.resolve()], 0)
+
+
+def test_current_output_review_record_displays_needs_review(tmp_path, app_module):
+    _configure_output_folder(app_module, tmp_path, "PreFinal-B")
+    source = app_module.INPUT_DIR / "x.jpg"
+    textured_image().save(source, format="JPEG", quality=95)
+    (app_module.OUTPUT_DIR / source.name).write_bytes(source.read_bytes())
+    _insert_output_state(app_module, source.name, app_module.OUTPUT_DIR, "REVIEW", "UNRESOLVED")
+
+    assert app_module.selection_status(source) == "Already exists in NeedsReview"
+
+
+def test_current_output_pass_record_displays_completed(tmp_path, app_module):
+    _configure_output_folder(app_module, tmp_path, "PreFinal-B")
+    source = app_module.INPUT_DIR / "x.jpg"
+    textured_image().save(source, format="JPEG", quality=95)
+    (app_module.OUTPUT_DIR / source.name).write_bytes(source.read_bytes())
+    _insert_output_state(app_module, source.name, app_module.OUTPUT_DIR, "PASS", "ACCEPTED")
+
+    assert app_module.selection_status(source) == "Already exists in Completed"
+
+
+def test_deleted_current_output_with_review_metadata_is_ready(tmp_path, app_module):
+    _configure_output_folder(app_module, tmp_path, "PreFinal-B")
+    source = app_module.INPUT_DIR / "x.jpg"
+    textured_image().save(source, format="JPEG", quality=95)
+    output = app_module.OUTPUT_DIR / source.name
+    output.write_bytes(source.read_bytes())
+    _insert_output_state(app_module, source.name, app_module.OUTPUT_DIR, "REVIEW", "UNRESOLVED")
+    output.unlink()
+
+    assert app_module.selection_status(source) == "Selected — ready"
+    assert app_module.pending_images([source]) == ([source.resolve()], 0)
+
+
+def test_new_empty_output_folder_makes_four_real_job_names_ready(tmp_path, app_module):
+    _configure_output_folder(app_module, tmp_path, "PreFinal-A")
+    names = [
+        "0902madhavi-diane-14.jpg",
+        "0902madhavi-diane-2.jpg",
+        "0902madhavi-diane-5.jpg",
+        "0902madhavi-diane-8.jpg",
+    ]
+    for name in names:
+        textured_image().save(app_module.INPUT_DIR / name, format="JPEG", quality=95)
+    for name in ("0902madhavi-diane-2.jpg", "0902madhavi-diane-5.jpg"):
+        _insert_output_state(app_module, name, app_module.OUTPUT_DIR, "REVIEW", "UNRESOLVED")
+
+    _configure_output_folder(app_module, tmp_path, "PreFinal-B")
+    sources = [app_module.INPUT_DIR / name for name in names]
+    assert [app_module.selection_status(source) for source in sources] == ["Selected — ready"] * 4
+    pending, skipped = app_module.pending_images(sources)
+    assert pending == [source.resolve() for source in sources]
+    assert skipped == 0
 
 
 def test_deleted_output_immediately_makes_source_pending(tmp_path, app_module):
