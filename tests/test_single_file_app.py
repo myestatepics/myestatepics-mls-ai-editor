@@ -91,6 +91,8 @@ def test_mocked_end_to_end_preserves_filename_exif_and_quality_100(tmp_path, app
             )
             assert "Never treat mirrors, shower glass, reflections" in kwargs["prompt"]
             assert "WINDOW PULL — V5.0 PRODUCTION BEHAVIOR" in kwargs["prompt"]
+            assert "Recover crisp, realistic exterior detail through confirmed real windows." in kwargs["prompt"]
+            assert "Exterior detail should be crisp, clear, and naturally contrasted—not soft," in kwargs["prompt"]
             assert "Natural light-blue sky creation or replacement is allowed" in kwargs["prompt"]
             assert "Never invent, add, substitute, or reconstruct unsupported physical exterior" in kwargs["prompt"]
             return response
@@ -149,6 +151,8 @@ def test_external_production_prompt_preserves_foundation_and_adds_fidelity_rules
     )
     assert "Never treat mirrors, shower glass, reflections" in loaded_prompt
     assert "WINDOW PULL — V5.0 PRODUCTION BEHAVIOR" in loaded_prompt
+    assert "Recover crisp, realistic exterior detail through confirmed real windows." in loaded_prompt
+    assert "Exterior detail should be crisp, clear, and naturally contrasted—not soft," in loaded_prompt
     assert "Natural light-blue sky creation or replacement is allowed" in loaded_prompt
     assert "including when the original sky is blown out, white," in loaded_prompt
     assert "white or blown out remains eligible for the permitted natural\nblue-sky treatment" in loaded_prompt
@@ -175,6 +179,8 @@ def test_v51_hardwood_glare_clarification_and_window_containment_are_preserved(
     assert "Do not treat a genuine directional direct-sunlight patch" in section
     assert "Preserve natural moderate sheen,\nrealistic reflections" in section
     assert "WINDOW PULL — V5.0 PRODUCTION BEHAVIOR" in prompt
+    assert "Recover crisp, realistic exterior detail through confirmed real windows." in prompt
+    assert "Exterior detail should be crisp, clear, and naturally contrasted—not soft," in prompt
     assert "Natural light-blue sky creation or replacement is allowed" in prompt
     assert "Never invent, add, substitute, or reconstruct unsupported physical exterior" in prompt
     assert "MIRROR AND PHOTOGRAPHY-EQUIPMENT REFLECTIONS" in prompt

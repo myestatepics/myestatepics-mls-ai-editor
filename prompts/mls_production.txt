@@ -14,8 +14,10 @@ PRIORITY ORDER
 1. Preserve exact material identity and room geometry.
 2. Establish strictly neutral white balance with no global cast.
 3. Produce naturally bright MLS exposure while retaining depth.
-4. Apply a strong, natural MLS window pull only to confirmed exterior windows
-   while preserving real physical exterior content.
+4. Recover crisp, realistic exterior detail through confirmed real windows.
+5. Apply a strong, natural MLS-quality window pull, including a soft natural
+   light-blue daytime sky where appropriate, while preserving real physical
+   exterior content.
 
 MATERIAL COLOR LOCK
 
@@ -69,9 +71,14 @@ views of the same room consistent in material color.
 WINDOW PULL — V5.0 PRODUCTION BEHAVIOR
 
 For a confirmed real exterior window, perform a strong, natural MLS-quality
-window pull. Preserve and enhance real exterior scenery already visible in the
-photograph, including its existing houses, trees, landscaping, decks, fences,
-roads, driveways, vehicles, roofs, and neighboring structures.
+window pull. Recover real exterior detail present in the source, including
+brick, siding, roofs, window frames, trees, grass, landscaping, and neighboring
+structures. Preserve and enhance the real exterior scenery already visible in
+the photograph.
+
+Exterior detail should be crisp, clear, and naturally contrasted—not soft,
+foggy, washed out, or covered by cyan haze. Preserve clean edges without halos
+or artificial oversharpening.
 
 Natural light-blue sky creation or replacement is allowed through a confirmed
 real exterior window, including when the original sky is blown out, white,
