@@ -1,4 +1,4 @@
-# MyEstatePics AI Editor — Direct V5.2 Candidate
+# MyEstatePics AI Editor — Direct V6.0 Candidate
 
 MyEstatePics AI Editor is a macOS PySide6 desktop application for conservative,
 batch-oriented enhancement of real-estate photographs. The frozen production
@@ -10,9 +10,10 @@ API or GPT-5.6.
 The source photograph remains untouched. A successful result is exported as a
 JPEG with the original filename and routed to `Completed` or `NeedsReview`.
 Errors are recorded separately. The production prompt prioritizes architectural
-and material fidelity, preservation-only window handling, and protection of
-mirrors and reflections. V5.2 does not perform authentic window recovery or
-sky replacement: a white or blown window remains naturally bright and neutral.
+and material fidelity, strong V5.0-style window treatment, and protection of
+mirrors and reflections. V6.0 permits natural blue-sky creation or replacement
+only through confirmed windows while prohibiting invented physical exterior
+scenery.
 It classifies source exposure locally before prompting and routes statistically
 suspicious output to `NeedsReview`. Images Edit output is locally upscaled back
 to the original delivery dimensions with Lanczos resampling; this does not
@@ -26,7 +27,7 @@ not alter JPEG outputs or make any API request.
 
 - Production source baseline before this documentation freeze:
   `e3f6d850cec7091149536f2a6b47236053afdc95` (V4.0 golden baseline)
-- Candidate badge: `Production v5.2` / `Prompt V5.2`
+- Candidate badge: `Production v6.0` / `Prompt V6.0` — September 2, 2026
 - Production model: `gpt-image-2`
 - Production endpoint: `/v1/images/edits`
 - API requests: one direct image-edit request per successful image; a genuine
@@ -39,8 +40,8 @@ for actual charges.
 
 ## Install the Direct application
 
-1. Open `MyEstatePics AI Editor - Direct V5.0.dmg`.
-2. Drag **MyEstatePics AI Editor - Direct V5.0** to **Applications**.
+1. Open `MyEstatePics AI Editor - Direct V6.0.dmg`.
+2. Drag **MyEstatePics AI Editor - Direct V6.0** to **Applications**.
 3. On first launch, Control-click the application, choose **Open**, and confirm
    **Open** if macOS warns that the developer cannot be verified.
 4. Add the API key to:
@@ -92,7 +93,7 @@ batch.
 
 ## Editing Memory
 
-V5.0 retains the local-only **Editing Memory** dialog. It persists approved editing
+V6.0 retains the local-only **Editing Memory** dialog. It persists approved editing
 lessons in the existing Direct Application Support directory:
 
 ```text

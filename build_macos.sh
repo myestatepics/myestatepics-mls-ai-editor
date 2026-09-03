@@ -3,9 +3,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-APP_NAME="MyEstatePics AI Editor - Direct V5.2"
+APP_NAME="MyEstatePics AI Editor - Direct V6.0"
 BUNDLE_ID="com.myestatepics.aieditor.direct"
-RELEASE_VERSION="5.2"
+RELEASE_VERSION="6.0"
 PYTHON="${PYTHON:-}"
 
 if [[ -z "$PYTHON" ]]; then

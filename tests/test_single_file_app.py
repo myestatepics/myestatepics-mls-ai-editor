@@ -90,9 +90,9 @@ def test_mocked_end_to_end_preserves_filename_exif_and_quality_100(tmp_path, app
                 in kwargs["prompt"]
             )
             assert "Never treat mirrors, shower glass, reflections" in kwargs["prompt"]
-            assert "Preserve and enhance exterior scenery through real existing windows" in kwargs["prompt"]
-            assert "Never reconstruct,\ninfer, generate, or invent exterior scenery" in kwargs["prompt"]
-            assert "naturally bright and neutral rather than inventing a view" in kwargs["prompt"]
+            assert "WINDOW PULL — V5.0 PRODUCTION BEHAVIOR" in kwargs["prompt"]
+            assert "Natural light-blue sky creation or replacement is allowed" in kwargs["prompt"]
+            assert "Never invent, add, substitute, or reconstruct unsupported physical exterior" in kwargs["prompt"]
             return response
 
     summary = app_module.process_batch(SimpleNamespace(images=Images()))
@@ -148,10 +148,11 @@ def test_external_production_prompt_preserves_foundation_and_adds_fidelity_rules
         in loaded_prompt
     )
     assert "Never treat mirrors, shower glass, reflections" in loaded_prompt
-    assert "WINDOW INTEGRITY — SOURCE-SUPPORTED RECOVERY ONLY" in loaded_prompt
-    assert "Preserve and enhance exterior scenery through real existing windows" in loaded_prompt
-    assert "Never reconstruct,\ninfer, generate, or invent exterior scenery" in loaded_prompt
-    assert "naturally bright and neutral rather than inventing a view" in loaded_prompt
+    assert "WINDOW PULL — V5.0 PRODUCTION BEHAVIOR" in loaded_prompt
+    assert "Natural light-blue sky creation or replacement is allowed" in loaded_prompt
+    assert "including when the original sky is blown out, white," in loaded_prompt
+    assert "white or blown out remains eligible for the permitted natural\nblue-sky treatment" in loaded_prompt
+    assert "Never invent, add, substitute, or reconstruct unsupported physical exterior" in loaded_prompt
     assert "Never create a fake window" in loaded_prompt
     assert "outdoor scenery inside a mirror" in loaded_prompt
     assert "HARDWOOD FLOOR CONTINUITY" in loaded_prompt
@@ -168,21 +169,14 @@ def test_v51_hardwood_glare_clarification_and_window_containment_are_preserved(
     section = prompt.split("HARDWOOD FLOOR CONTINUITY\n\n", 1)[1].split(
         "\n\nWALL AND CEILING CONTINUITY", 1
     )[0]
-    assert section == (
-        "Preserve V4.0 hardwood exactly as the default behavior. When a continuous\n"
-        "hardwood surface contains an abnormally intense window-driven glare region that\n"
-        "becomes visually dominant, reduce only the excessive highlight intensity and\n"
-        "blend it naturally into the surrounding floor. Preserve the original wood\n"
-        "color, grain, plank boundaries, texture, natural sheen, directional daylight,\n"
-        "soft reflections, and photographic depth. Do not flatten the floor, recolor\n"
-        "the wood, remove all reflection, create artificial uniformity, or modify\n"
-        "unaffected hardwood."
-    )
-    assert "WINDOW PULL" not in prompt
-    assert "LIGHT-BLUE SKY THROUGH WINDOWS" not in prompt
-    assert "soft natural light blue" not in prompt.casefold()
-    assert "Recover crisp, realistic exterior detail" not in prompt
-    assert "replace unresolved window content" not in prompt
+    assert "Preserve V4.0 hardwood exactly as the default behavior." in section
+    assert "Strongly reduce only broad, milky white or bluish, window-shaped reflections" in section
+    assert "make the floor look wet, plastic, washed out, or\nartificially glossy" in section
+    assert "Do not treat a genuine directional direct-sunlight patch" in section
+    assert "Preserve natural moderate sheen,\nrealistic reflections" in section
+    assert "WINDOW PULL — V5.0 PRODUCTION BEHAVIOR" in prompt
+    assert "Natural light-blue sky creation or replacement is allowed" in prompt
+    assert "Never invent, add, substitute, or reconstruct unsupported physical exterior" in prompt
     assert "MIRROR AND PHOTOGRAPHY-EQUIPMENT REFLECTIONS" in prompt
     assert "LOCAL MATERIAL HIGHLIGHT PROTECTION" in prompt
     assert "Do not globally darken the photograph" in prompt
@@ -225,17 +219,38 @@ def test_v52_exposure_classification_is_pixel_metric_only(
     assert "filename" not in prompt.casefold()
 
 
-def test_v51_bright_source_colorization_is_reviewed_not_reported_as_window_recovery(
-    tmp_path, app_module
+def test_v52_blue_sky_creation_alone_is_not_a_fabricated_scenery_review(
+    tmp_path, app_module, monkeypatch
 ):
     source = tmp_path / "source.jpg"
     source_image = Image.new("RGB", (120, 80), (245, 245, 245))
     source_image.save(source)
     output = Image.new("RGB", (120, 80), (30, 110, 255))
+    # This test concerns only the fabricated-scenery signal; sharpness remains
+    # independently reviewable in production.
+    monkeypatch.setattr(app_module, "SHARPNESS_FAIL_RATIO", 0.0)
+    monkeypatch.setattr(app_module, "SHARPNESS_REVIEW_RATIO", 0.0)
     result = app_module.compare_images(source, output, sharpened=False)
-    assert result.status in {"REVIEW", "FAIL"}
-    assert any("Possible fabricated window/exterior detail" in message for message in result.messages)
+    assert result.status == "PASS"
+    assert not any("Possible fabricated window/exterior detail" in message for message in result.messages)
     assert not any("window pull was completed" in message.casefold() for message in result.messages)
+
+
+def test_gui_uses_appearance_aware_palette_roles_for_readability(app_module):
+    source = inspect.getsource(app_module.launch_gui)
+    assert "color: palette(window-text);" in source
+    assert "background: palette(window);" in source
+    assert "QLineEdit, QTextEdit, QPlainTextEdit" in source
+    assert "color: palette(text); background: palette(base);" in source
+    assert 'setStyleSheet("color: palette(text);")' in source
+    assert "QMessageBox { background: palette(window); color: palette(window-text); }" in source
+    assert "QMessageBox QLabel { color: palette(window-text); background: transparent; }" in source
+
+
+def test_v60_completion_dialog_uses_appearance_aware_foreground_and_background(app_module):
+    source = inspect.getsource(app_module.launch_gui)
+    assert "QMessageBox { background: palette(window); color: palette(window-text); }" in source
+    assert "QMessageBox QPushButton { color: palette(button-text); background: palette(button); }" in source
 
 
 def _window_scene_fixture(*, source_window, output_window, textured=False):
@@ -246,16 +261,17 @@ def _window_scene_fixture(*, source_window, output_window, textured=False):
     output[window_slice] = output_window
     if textured:
         y, x = np.indices((75, 115))
+        checker = ((x // 4 + y // 4) % 2).astype(np.int16)
         output[20:95, 35:150, 2] = np.clip(
-            output[20:95, 35:150, 2].astype(np.int16) + ((x + y) % 30), 0, 255
+            output[20:95, 35:150, 2].astype(np.int16) - checker * 60, 0, 255
         )
         output[20:95, 35:150, 1] = np.clip(
-            output[20:95, 35:150, 1].astype(np.int16) + ((x * 3 + y) % 25), 0, 255
+            output[20:95, 35:150, 1].astype(np.int16) + checker * 35, 0, 255
         )
     return source, output
 
 
-def test_v52_blown_low_information_window_with_new_scenery_routes_review(
+def test_v60_blown_window_blue_sky_plus_new_structure_routes_review(
     tmp_path, app_module, monkeypatch
 ):
     source_arr, output_arr = _window_scene_fixture(
@@ -274,7 +290,7 @@ def test_v52_blown_low_information_window_with_new_scenery_routes_review(
     assert any("low-information bright source region" in message for message in result.messages)
 
 
-def test_v52_blown_low_information_window_remaining_neutral_passes(tmp_path, app_module):
+def test_v60_blown_window_remaining_neutral_passes(tmp_path, app_module):
     source_arr, output_arr = _window_scene_fixture(
         source_window=(250, 250, 250), output_window=(244, 244, 244)
     )
@@ -287,7 +303,7 @@ def test_v52_blown_low_information_window_remaining_neutral_passes(tmp_path, app
     assert not any("fabricated window/exterior" in message for message in result.messages)
 
 
-def test_v52_source_supported_exterior_improvement_passes(tmp_path, app_module):
+def test_v60_existing_source_scenery_clarification_passes(tmp_path, app_module):
     source_arr, output_arr = _window_scene_fixture(
         source_window=(65, 125, 180), output_window=(75, 145, 205), textured=True
     )
@@ -504,10 +520,19 @@ def test_direct_images_edit_is_the_only_production_request(
 
 
 def test_application_and_prompt_versions_are_independent(app_module):
-    assert app_module.PROGRAM_VERSION == "5.2"
-    assert app_module.PROMPT_VERSION == "V5.2"
-    assert app_module.DISPLAY_APPLICATION_NAME == "MyEstatePics AI Editor - Direct V5.2"
-    assert app_module.REVIEW_PDF_VERSION == "V5.2"
+    assert app_module.PROGRAM_VERSION == "6.0"
+    assert app_module.PROMPT_VERSION == "V6.0"
+    assert app_module.RELEASE_DATE == "September 2, 2026"
+    assert app_module.DISPLAY_APPLICATION_NAME == "MyEstatePics AI Editor - Direct V6.0"
+    assert app_module.REVIEW_PDF_VERSION == "V6.0"
+
+
+def test_v60_packaging_metadata_matches_application_version():
+    macos_build = (ROOT / "build_macos.sh").read_text(encoding="utf-8")
+    dmg_build = (ROOT / "build_dmg.sh").read_text(encoding="utf-8")
+    assert 'APP_NAME="MyEstatePics AI Editor - Direct V6.0"' in macos_build
+    assert 'RELEASE_VERSION="6.0"' in macos_build
+    assert 'APP_NAME="MyEstatePics AI Editor - Direct V6.0"' in dmg_build
 
 
 def test_v51_batch_uses_no_filename_triggered_window_rules(tmp_path, app_module):
@@ -587,7 +612,7 @@ def test_large_jpeg_is_completed_without_size_based_review(tmp_path, app_module)
 
     output = app_module.OUTPUT_DIR / source.name
     assert images.calls == 1
-    # V5.2 may route the deliberately noisy fixture to review for a real
+    # V6.0 may route the deliberately noisy fixture to review for a real
     # fidelity signal, but JPEG size itself must never cause failure or retry.
     assert summary.completed + summary.review == 1
     delivered = output if output.exists() else app_module.REVIEW_DIR / source.name
@@ -614,8 +639,8 @@ def test_batch_review_pdfs_are_local_ordered_and_preserve_failed_position(
         inputs, outputs, "test-review-pdfs"
     )
 
-    assert before_pdf.name == "MyEstatePics_V5.2_BEFORE.pdf"
-    assert after_pdf.name == "MyEstatePics_V5.2_AFTER.pdf"
+    assert before_pdf.name == "MyEstatePics_V6.0_BEFORE.pdf"
+    assert after_pdf.name == "MyEstatePics_V6.0_AFTER.pdf"
     assert before_pdf.parent == after_pdf.parent
     assert before_pdf.read_bytes().startswith(b"%PDF")
     assert after_pdf.read_bytes().startswith(b"%PDF")
@@ -946,7 +971,7 @@ def test_paid_confirmation_summarizes_only_checked_images(app_module):
     assert "Quality: Medium" in text
     assert "Estimated cost: $0.32" in text
     assert "Demo Mode: Off" in text
-    assert "Prompt: MLS Production V5.2" in text
+    assert "Prompt: MLS Production V6.0" in text
 
 
 def test_retry_confirmation_queues_without_claiming_to_start(app_module):

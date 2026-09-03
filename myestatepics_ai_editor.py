@@ -1,5 +1,5 @@
 """
-MyEstatePics MLS Interior Batch Editor — Direct V5.2
+MyEstatePics MLS Interior Batch Editor — Direct V6.0
 
 Workflow:
     Incoming/*.jpg or *.jpeg
@@ -60,8 +60,8 @@ from reportlab.pdfgen import canvas
 DEFAULT_APPLICATION_NAME = "MyEstatePics AI Editor"
 DIRECT_TEST_APPLICATION_NAME = "MyEstatePics AI Editor - Direct"
 # The bundle/Finder name is versioned, but this identity deliberately remains
-# stable so V5.2 reuses the established Direct Application Support settings.
-DISPLAY_APPLICATION_NAME = "MyEstatePics AI Editor - Direct V5.2"
+# stable so V6.0 reuses the established Direct Application Support settings.
+DISPLAY_APPLICATION_NAME = "MyEstatePics AI Editor - Direct V6.0"
 APPLICATION_NAME = os.environ.get(
     "MYESTATEPICS_APPLICATION_NAME", DEFAULT_APPLICATION_NAME
 )
@@ -147,8 +147,9 @@ PROMPT_FILE = resource_path("prompts/mls_production.txt")
 LEARNED_RULES_FILE = USER_DATA_DIR / "learned_rules.json"
 FEEDBACK_HISTORY_FILE = USER_DATA_DIR / "feedback_history.jsonl"
 
-PROGRAM_VERSION = "5.2"
-PROMPT_VERSION = "V5.2"
+PROGRAM_VERSION = "6.0"
+PROMPT_VERSION = "V6.0"
+RELEASE_DATE = "September 2, 2026"
 MODEL = "gpt-image-2"
 QUALITY = "low"
 QUALITY_OPTIONS = ("low", "medium", "high")
@@ -160,7 +161,7 @@ SQUARE_SIZE = "1024x1024"
 IMAGES_EDIT_API_PATH = "/v1/images/edits"
 API_OUTPUT_FORMAT = "png"
 JPEG_OUTPUT_QUALITY = 100
-REVIEW_PDF_VERSION = "V5.2"
+REVIEW_PDF_VERSION = "V6.0"
 REVIEW_PDF_MAX_IMAGE_EDGE = 1200
 DPI = (300, 300)
 OBSERVED_ESTIMATED_COST_PER_IMAGE = 0.28 / 6.0
@@ -340,7 +341,7 @@ def load_prompt() -> str:
 
 
 def editing_agent() -> EditingAgent:
-    """Return the zero-API V5.2 rule-memory layer using stable app support."""
+    """Return the zero-API V6.0 rule-memory layer using stable app support."""
     return EditingAgent(USER_DATA_DIR)
 
 
@@ -478,30 +479,23 @@ def possible_bright_window_review_signals(
     source_luminance = luminance_from_rgb(source_arr)
     source_saturation = saturation_from_rgb(source_arr)
     output_luminance = luminance_from_rgb(output_arr)
-    output_saturation = saturation_from_rgb(output_arr)
     candidate_mask = (source_luminance >= 0.92) & (source_saturation <= 0.06)
     if float(candidate_mask.mean()) < 0.005:
         return []
 
-    saturation_increase = float(
-        np.median(output_saturation[candidate_mask])
-        - np.median(source_saturation[candidate_mask])
-    )
     output_blue = output_arr[..., 2] - np.maximum(output_arr[..., 0], output_arr[..., 1])
     output_green = output_arr[..., 1] - np.maximum(output_arr[..., 0], output_arr[..., 2])
     colorized_fraction = float(
         ((output_blue > 0.10) | (output_green > 0.10))[candidate_mask].mean()
     )
-    source_edge_energy = float(np.mean(_edge_energy(source_luminance)[candidate_mask]))
     output_edge_energy = float(np.mean(_edge_energy(output_luminance)[candidate_mask]))
     mean_rgb_delta = float(np.mean(np.abs(output_arr[candidate_mask] - source_arr[candidate_mask])))
-    strong_new_color = colorized_fraction >= 0.12 and saturation_increase >= 0.16
     # Existing window detail can legitimately become sharper after a direct
-    # edit.  Structure alone is therefore not enough: require it to arrive
-    # with a substantial new exterior-like colour signal.
+    # edit, and a blue sky is a permitted V5.0 window-pull result. Structure
+    # alone or blue color alone is therefore not enough: require both.
     new_colored_structure = (
         colorized_fraction >= 0.12
-        and output_edge_energy > max(source_edge_energy * 3.0, 0.0015)
+        and output_edge_energy > 0.0015
     )
     # A second, independent review signal covers replacement/reconstruction
     # that stays near-neutral: a sufficiently large, formerly low-information
@@ -510,14 +504,13 @@ def possible_bright_window_review_signals(
     neutral_reconstruction = (
         float(candidate_mask.mean()) >= 0.008
         and mean_rgb_delta >= 0.16
+        and colorized_fraction < 0.12
     )
 
-    if strong_new_color or new_colored_structure or neutral_reconstruction:
+    if new_colored_structure or neutral_reconstruction:
         details: list[str] = []
-        if strong_new_color:
-            details.append("new blue/green or saturated color")
         if new_colored_structure:
-            details.append("new edge/texture structure")
+            details.append("new colored edge/texture structure")
         if neutral_reconstruction:
             details.append("substantial neutral reconstruction")
         return [
@@ -3100,12 +3093,12 @@ def launch_gui() -> int:
 
     app_stylesheet = """
         QWidget {
-            color: #172033;
+            color: palette(window-text);
             font-size: 13px;
         }
-        QMainWindow, QWidget#appRoot, QScrollArea { background: #f4f6fa; border: none; }
-        QLabel#appTitle { font-size: 28px; font-weight: 700; color: #111827; }
-        QLabel#appSubtitle { font-size: 13px; color: #667085; }
+        QMainWindow, QWidget#appRoot, QScrollArea { background: palette(window); border: none; }
+        QLabel#appTitle { font-size: 28px; font-weight: 700; color: palette(window-text); }
+        QLabel#appSubtitle { font-size: 13px; color: palette(window-text); }
         QLabel#versionBadge {
             color: #175cd3; background: #eff8ff; border: 1px solid #b2ddff;
             border-radius: 12px; padding: 5px 10px; font-weight: 600;
@@ -3114,67 +3107,73 @@ def launch_gui() -> int:
             color: #7a2e0e; background: #fef0c7; border: 1px solid #fec84b;
             border-radius: 9px; padding: 9px 14px; font-size: 14px; font-weight: 750;
         }
-        QCheckBox { color: #344054; font-weight: 650; spacing: 8px; }
+        QCheckBox { color: palette(window-text); font-weight: 650; spacing: 8px; }
         QCheckBox::indicator { width: 18px; height: 18px; }
         QLabel#pathValue {
-            color: #344054; background: #f8fafc; border: 1px solid #e4e7ec;
+            color: palette(text); background: palette(base); border: 1px solid palette(midlight);
             border-radius: 7px; padding: 7px 9px;
         }
-        QLabel#hintText { color: #667085; font-size: 12px; }
+        QLabel#hintText { color: palette(window-text); font-size: 12px; }
         QGroupBox {
-            background: white; border: 1px solid #e4e7ec; border-radius: 12px;
+            background: palette(base); border: 1px solid palette(midlight); border-radius: 12px;
             margin-top: 12px; padding: 16px 14px 14px 14px;
-            font-size: 14px; font-weight: 650; color: #1d2939;
+            font-size: 14px; font-weight: 650; color: palette(window-text);
         }
         QGroupBox::title { subcontrol-origin: margin; left: 14px; padding: 0 6px; }
-        QPushButton {
-            background: white; border: 1px solid #d0d5dd; border-radius: 8px;
-            padding: 7px 12px; color: #344054; font-weight: 600;
+        QLineEdit, QTextEdit, QPlainTextEdit {
+            color: palette(text); background: palette(base); border: 1px solid palette(midlight);
         }
-        QPushButton:hover { background: #f9fafb; border-color: #98a2b3; }
-        QPushButton:pressed { background: #f2f4f7; }
-        QPushButton:disabled { color: #98a2b3; background: #f2f4f7; border-color: #eaecf0; }
+        QPushButton {
+            background: palette(button); border: 1px solid palette(midlight); border-radius: 8px;
+            padding: 7px 12px; color: palette(button-text); font-weight: 600;
+        }
+        QPushButton:hover { background: palette(light); border-color: palette(mid); }
+        QPushButton:pressed { background: palette(midlight); }
+        QPushButton:disabled { color: palette(mid); background: palette(window); border-color: palette(midlight); }
         QPushButton#primaryButton {
             color: white; background: #2563eb; border-color: #2563eb;
             padding: 9px 18px;
         }
         QPushButton#primaryButton:hover { background: #1d4ed8; border-color: #1d4ed8; }
-        QPushButton#dangerButton { color: #b42318; background: #fff; border-color: #fda29b; }
-        QPushButton#dangerButton:hover { background: #fff5f4; }
-        QPushButton#reviewButton { color: #7a2e0e; background: #fffaeb; border-color: #fedf89; }
+        QPushButton#dangerButton { color: #b42318; background: palette(button); border-color: #fda29b; }
+        QPushButton#dangerButton:hover { background: palette(light); }
+        QPushButton#reviewButton { color: #7a2e0e; background: palette(button); border-color: #fedf89; }
         QComboBox {
-            background: white; border: 1px solid #d0d5dd; border-radius: 8px;
-            padding: 7px 28px 7px 10px; min-width: 105px;
+            color: palette(button-text); background: palette(button); border: 1px solid palette(midlight);
+            border-radius: 8px; padding: 7px 28px 7px 10px; min-width: 105px;
         }
         QComboBox:focus { border: 2px solid #84adff; }
+        QComboBox QAbstractItemView { color: palette(text); background: palette(base); }
         QFrame#metricCard {
-            background: white; border: 1px solid #e4e7ec; border-radius: 11px;
+            background: palette(base); border: 1px solid palette(midlight); border-radius: 11px;
         }
-        QLabel#metricCaption { color: #667085; font-size: 11px; font-weight: 650; }
-        QLabel#metricValue { color: #101828; font-size: 14px; font-weight: 650; }
+        QLabel#metricCaption { color: palette(window-text); font-size: 11px; font-weight: 650; }
+        QLabel#metricValue { color: palette(window-text); font-size: 14px; font-weight: 650; }
         QTableWidget {
-            background: white; alternate-background-color: #f9fafb; border: 1px solid #e4e7ec;
-            border-radius: 8px; gridline-color: #eaecf0; selection-background-color: #eff8ff;
-            selection-color: #175cd3;
+            color: palette(text); background: palette(base); alternate-background-color: palette(alternate-base);
+            border: 1px solid palette(midlight); border-radius: 8px; gridline-color: palette(midlight);
+            selection-background-color: palette(highlight); selection-color: palette(highlighted-text);
         }
         QHeaderView::section {
-            background: #f9fafb; color: #475467; border: none; border-bottom: 1px solid #e4e7ec;
+            background: palette(button); color: palette(button-text); border: none; border-bottom: 1px solid palette(midlight);
             padding: 8px; font-weight: 650;
         }
+        QMessageBox { background: palette(window); color: palette(window-text); }
+        QMessageBox QLabel { color: palette(window-text); background: transparent; }
+        QMessageBox QPushButton { color: palette(button-text); background: palette(button); }
         QPlainTextEdit {
-            background: #101828; color: #d0d5dd; border: 1px solid #344054;
             border-radius: 9px; padding: 10px; font-family: monospace; font-size: 11px;
         }
         QProgressBar {
-            background: #eaecf0; border: none; border-radius: 5px; height: 10px; text-align: center;
+            color: palette(text); background: palette(midlight); border: none; border-radius: 5px; height: 10px; text-align: center;
         }
         QProgressBar::chunk { background: #2563eb; border-radius: 5px; }
         QLabel#imageCanvas {
-            background: #101828; color: #98a2b3; border: 1px solid #344054;
+            background: palette(dark); color: palette(light); border: 1px solid palette(mid);
             border-radius: 10px;
         }
         QLabel#reviewReason {
-            color: #7a2e0e; background: #fffaeb; border: 1px solid #fedf89;
+            color: palette(text); background: palette(base); border: 1px solid palette(midlight);
             border-radius: 8px; padding: 10px;
         }
     """
@@ -3418,7 +3417,7 @@ def launch_gui() -> int:
 
         def __init__(self, parent=None):
             super().__init__(parent)
-            self.setWindowTitle("Editing Memory — MyEstatePics V5.2")
+            self.setWindowTitle("Editing Memory — MyEstatePics V6.0")
             self.resize(920, 480)
             layout = QVBoxLayout(self)
             explanation = QLabel(
@@ -3543,7 +3542,7 @@ def launch_gui() -> int:
             header_text.addWidget(title)
             header_text.addWidget(subtitle)
             header_status = QGridLayout()
-            version = QLabel(f"Production v{PROGRAM_VERSION}")
+            version = QLabel(f"Production v{PROGRAM_VERSION} · {RELEASE_DATE}")
             version.setObjectName("versionBadge")
             prompt_version = QLabel(f"Prompt v{PROMPT_VERSION}")
             prompt_version.setObjectName("versionBadge")
@@ -3655,7 +3654,7 @@ def launch_gui() -> int:
             job_layout.addWidget(self.active_review_path, 7, 0, 1, 4)
             self.folder_validation = QLabel()
             self.folder_validation.setWordWrap(True)
-            self.folder_validation.setStyleSheet("color: #b42318;")
+            self.folder_validation.setStyleSheet("color: palette(text);")
             job_layout.addWidget(self.folder_validation, 8, 0, 1, 4)
             layout.addWidget(job_group)
 
@@ -3881,7 +3880,7 @@ def launch_gui() -> int:
             self.review_window.set_demo_mode(enabled)
             if enabled:
                 self.api_key_status.setText("Not required — Demo Mode makes no API calls.")
-                self.api_key_status.setStyleSheet("color: #7a2e0e;")
+                self.api_key_status.setStyleSheet("color: palette(text);")
                 self.log.appendPlainText("DEMO — NO API CALLS enabled.")
             else:
                 self.reload_api_key(show_error=False)
@@ -4144,9 +4143,7 @@ def launch_gui() -> int:
             self.api_key, message = load_project_api_key()
             valid = self.api_key is not None
             self.api_key_status.setText(message)
-            self.api_key_status.setStyleSheet(
-                "color: #187a33;" if valid else "color: #b42318;"
-            )
+            self.api_key_status.setStyleSheet("color: palette(text);")
             if hasattr(self, "start_button"):
                 self.update_start_enabled()
             if valid:
