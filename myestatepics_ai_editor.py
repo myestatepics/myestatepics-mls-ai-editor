@@ -2238,9 +2238,17 @@ def load_primary_folder_settings(
     return Path(default_incoming), Path(default_completed), result
 
 
-def scanning_status_text(incoming: Path, count: int) -> str:
+def ready_status_text(count: int) -> str:
     noun = "image" if count == 1 else "images"
-    return f"Scanning: {Path(incoming)}\n{count} supported {noun} found"
+    return f"Ready — {count} {noun} selected"
+
+
+def processing_status_text(completed: int, total: int) -> str:
+    return f"Processing — {completed} of {total} completed"
+
+
+def completed_status_text(completed: int, total: int) -> str:
+    return f"Completed — {completed} of {total}"
 
 
 def scan_supported_images(input_dir: Path) -> list[Path]:
@@ -2465,11 +2473,6 @@ def selection_status(input_file: Path) -> str:
     if destination:
         return f"Already exists in {destination}"
     return "Selected — ready"
-
-
-def active_needs_review_path_message() -> str:
-    """Make the current quarantine destination explicit for GUI diagnostics."""
-    return f"NeedsReview destination: {REVIEW_DIR}"
 
 
 def pending_images(selected_files: list[Path] | None = None) -> tuple[list[Path], int]:
@@ -3501,6 +3504,7 @@ def launch_gui() -> int:
             self.thread = None
             self.worker = None
             self.processing_active = False
+            self.batch_total = 0
             self.processing_control_states = {}
             self.api_key: str | None = None
             self.selected_files: set[Path] = set()
@@ -3645,17 +3649,10 @@ def launch_gui() -> int:
             self.demo_result.setEnabled(False)
             job_layout.addWidget(QLabel("Demo Results"), 5, 2)
             job_layout.addWidget(self.demo_result, 5, 3)
-            self.scan_status = QLabel()
-            self.scan_status.setWordWrap(True)
-            job_layout.addWidget(self.scan_status, 6, 0, 1, 4)
-            self.active_review_path = QLabel(active_needs_review_path_message())
-            self.active_review_path.setObjectName("appSubtitle")
-            self.active_review_path.setWordWrap(True)
-            job_layout.addWidget(self.active_review_path, 7, 0, 1, 4)
             self.folder_validation = QLabel()
             self.folder_validation.setWordWrap(True)
             self.folder_validation.setStyleSheet("color: palette(text);")
-            job_layout.addWidget(self.folder_validation, 8, 0, 1, 4)
+            job_layout.addWidget(self.folder_validation, 6, 0, 1, 4)
             layout.addWidget(job_group)
 
             self.advanced_group = QGroupBox("Advanced Folders")
@@ -3739,7 +3736,7 @@ def launch_gui() -> int:
             self.progress.setTextVisible(False)
             footer_layout.addWidget(self.progress)
             footer_status = QHBoxLayout()
-            self.current = QLabel("Current: —")
+            self.current = QLabel(ready_status_text(0))
             self.counts = QLabel("Completed: 0   NeedsReview: 0   Error: 0")
             footer_status.addWidget(self.current, 1)
             footer_status.addWidget(self.counts)
@@ -4068,7 +4065,6 @@ def launch_gui() -> int:
 
         def update_job_summary(self):
             self.apply_paths()
-            self.active_review_path.setText(active_needs_review_path_message())
             valid, message = validate_folder_configuration(
                 *self.folder_paths[:4]
             )
@@ -4088,14 +4084,13 @@ def launch_gui() -> int:
             self.folder_validation.setText(summary_message)
             quality = self.quality.currentText().lower()
             self.images_found.setText(str(len(self.available_files)))
-            self.scan_status.setText(
-                scanning_status_text(self.folder_paths[0], len(self.available_files))
-            )
             self.images_selected.setText(str(len(self.selected_files)))
             self.cost.setText(
                 f"${selected_batch_cost(eligible, quality, self.demo_checkbox.isChecked()):.2f}"
             )
             self.progress.setRange(0, max(1, len(eligible)))
+            if not self.processing_active:
+                self.current.setText(ready_status_text(len(self.selected_files)))
             self.update_start_enabled()
 
         def update_start_enabled(self):
@@ -4214,6 +4209,8 @@ def launch_gui() -> int:
                     return
                 client = OpenAI(api_key=api_key)
             self.thread = QThread(self)
+            self.batch_total = len(files)
+            self.current.setText(processing_status_text(0, self.batch_total))
             self.log.appendPlainText(
                 f"Starting {'DEMO ' if demo_mode else ''}batch with quality: {quality}"
             )
@@ -4266,17 +4263,22 @@ def launch_gui() -> int:
                 self.worker.cancel()
                 self.log.appendPlainText("Cancelled by user")
                 self.current.setText(
-                    "Current: Cancel requested — waiting for current image"
+                    f"Cancel requested — {self.progress.value()} of {self.batch_total} completed"
                 )
                 self.cancel_button.setEnabled(False)
 
         def on_event(self, kind, payload):
             if kind == "started":
-                self.current.setText(f"Current: {payload['filename']}")
                 self.progress.setMaximum(payload["total"])
+                self.current.setText(
+                    processing_status_text(self.progress.value(), payload["total"])
+                )
                 self.log.appendPlainText(f"Processing {payload['filename']}…")
             elif kind == "finished":
                 self.progress.setValue(self.progress.value() + 1)
+                self.current.setText(
+                    processing_status_text(self.progress.value(), self.progress.maximum())
+                )
                 review_reason = payload["needs_review_reason"] or "—"
                 self.log.appendPlainText(
                     f"Filename: {payload['filename']} | Quality: {QUALITY} | "
@@ -4289,6 +4291,9 @@ def launch_gui() -> int:
                 self.refresh_selection_table()
             elif kind == "failed":
                 self.progress.setValue(self.progress.value() + 1)
+                self.current.setText(
+                    processing_status_text(self.progress.value(), self.progress.maximum())
+                )
                 self.log.appendPlainText(
                     f"Filename: {payload['filename']} | Quality: {QUALITY} | "
                     f"Processing time: {payload['processing_time_seconds']:.2f}s | "
@@ -4302,8 +4307,10 @@ def launch_gui() -> int:
         def on_complete(self, summary):
             self.set_processing_active(False)
             self.cancel_button.setEnabled(False)
-            self.current.setText(
-                "Current: Cancelled by user" if summary.cancelled else "Current: —"
+            final_status = (
+                f"Cancelled — {summary.images_processed} of {self.batch_total} completed"
+                if summary.cancelled
+                else completed_status_text(summary.images_processed, self.batch_total)
             )
             self.counts.setText(
                 f"Completed: {summary.completed}   NeedsReview: {summary.review}   Error: {summary.failed}"
@@ -4339,6 +4346,7 @@ def launch_gui() -> int:
                 self.log.appendPlainText(f"Review PDFs created: {summary.before_pdf} | {summary.after_pdf}")
             self.review_window.refresh_files()
             self.analyze()
+            self.current.setText(final_status)
 
         def queue_retry(self, filename):
             self.apply_paths()

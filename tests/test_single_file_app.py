@@ -359,11 +359,11 @@ def test_v52_generic_luminance_signal_remains_diagnostic_only(tmp_path, app_modu
     assert any("Excessive global luminance increase" in message for message in result.messages)
 
 
-def test_v52_active_needs_review_path_is_explicit(tmp_path, app_module):
-    configure_tmp(app_module, tmp_path)
-    assert app_module.active_needs_review_path_message() == (
-        f"NeedsReview destination: {app_module.REVIEW_DIR}"
-    )
+def test_live_status_text_is_production_facing(app_module):
+    assert app_module.ready_status_text(15) == "Ready — 15 images selected"
+    assert app_module.ready_status_text(1) == "Ready — 1 image selected"
+    assert app_module.processing_status_text(5, 15) == "Processing — 5 of 15 completed"
+    assert app_module.completed_status_text(15, 15) == "Completed — 15 of 15"
 
 
 def test_v52_real_mrinal_window_verifier_regression(app_module):
@@ -957,12 +957,12 @@ def test_loading_valid_preferences_does_not_rewrite_them(tmp_path, app_module):
     assert preferences.read_bytes() == before
 
 
-def test_scanning_message_contains_exact_incoming_path(tmp_path, app_module):
-    incoming = tmp_path / "Folder With Spaces" / "Incoming"
-    incoming.mkdir(parents=True)
-    message = app_module.scanning_status_text(incoming, 0)
-    assert str(incoming) in message
-    assert "0 supported images found" in message
+def test_main_window_does_not_include_folder_debug_status_labels(app_module):
+    source = inspect.getsource(app_module.launch_gui)
+    assert "scan_status" not in source
+    assert "active_review_path" not in source
+    assert "NeedsReview destination:" not in source
+    assert "Scanning:" not in source
 
 
 def test_paid_confirmation_summarizes_only_checked_images(app_module):
