@@ -22,12 +22,16 @@ ROOT = Path(__file__).resolve().parents[1]
 @pytest.fixture()
 def app_module():
     name = "single_file_editor"
+    sys.path.insert(0, str(ROOT))
     spec = importlib.util.spec_from_file_location(name, ROOT / "myestatepics_ai_editor.py")
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
+    try:
+        spec.loader.exec_module(module)
+        return module
+    finally:
+        sys.path.remove(str(ROOT))
 
 
 def textured_image(size=(120, 80)):
@@ -330,6 +334,45 @@ def test_v60_existing_source_scenery_clarification_passes(tmp_path, app_module):
     assert not any("fabricated window/exterior" in message for message in result.messages)
 
 
+def test_v60_small_blown_glass_patch_with_new_physical_detail_routes_review(app_module):
+    """A small pane must not be diluted by unrelated bright pixels."""
+    source = np.full((120, 180, 3), 250, dtype=np.float32) / 255.0
+    output = source.copy()
+    source[36:72, 72:108] = 250 / 255.0
+    output[36:72, 72:108] = np.asarray((45, 135, 235), dtype=np.float32) / 255.0
+    # Central-difference edge measurement deliberately suppresses an
+    # alternating one-pixel checkerboard, so use visible multi-pixel bands.
+    checker = (np.indices((36, 36))[1] // 4 % 2) == 0
+    patch = output[36:72, 72:108]
+    patch[..., 1][checker] = 0.85
+    patch[..., 2][checker] = 0.35
+
+    signals = app_module.local_bright_glass_review_signals(source, output)
+
+    assert signals
+    assert "local low-information bright glass" in signals[0]
+
+
+def test_v60_small_blown_glass_blue_sky_only_passes(app_module):
+    source = np.full((120, 180, 3), 250, dtype=np.float32) / 255.0
+    output = source.copy()
+    source[36:72, 72:108] = 250 / 255.0
+    output[36:72, 72:108] = np.asarray((45, 135, 235), dtype=np.float32) / 255.0
+
+    assert app_module.local_bright_glass_review_signals(source, output) == []
+
+
+def test_v60_small_bright_pane_with_source_correspondence_passes(app_module):
+    source = np.full((120, 180, 3), (60, 55, 50), dtype=np.float32) / 255.0
+    output = source.copy()
+    y, x = np.indices((24, 24))
+    physical = np.stack((80 + x * 3, 115 + y * 3, 75 + (x + y) * 2), axis=2) / 255.0
+    source[42:66, 76:100] = physical
+    output[42:66, 76:100] = np.clip(physical * 1.15, 0, 1)
+
+    assert app_module.local_bright_glass_review_signals(source, output) == []
+
+
 @pytest.mark.parametrize(
     ("name", "source_color", "output_color"),
     [
@@ -420,6 +463,59 @@ def test_v52_real_lincoln_verifier_regression(app_module):
         with Image.open(after / name) as edited:
             result = app_module.compare_images(before / name, edited.convert("RGB"), False)
         assert result.status == "PASS", name
+
+
+def test_v60_real_chad_diane_integrity_regressions(app_module):
+    """Read-only regressions for the confirmed Chad–Diane production batch."""
+    root = Path("/Users/subratmohapatra/Documents/MyestatePics/2026/09-11-chad-diane")
+    before = root / "09-11-chad-diane-LR"
+    after = root / "09-11-chad-diane-Prefinal"
+    cases = {
+        "chad-diane-4.jpg": "REVIEW",
+        "chad-diane-11.jpg": "REVIEW",
+        "chad-diane-17.jpg": "PASS",
+        "chad-diane-20.jpg": "REVIEW",
+        "chad-diane-21.jpg": "REVIEW",
+        "chad-diane-22.jpg": "PASS",
+        "chad-diane-29.jpg": "PASS",
+        "chad-diane-40.jpg": "REVIEW",
+    }
+    if not all((before / name).is_file() and (after / name).is_file() for name in cases):
+        pytest.skip("Real Chad–Diane integrity regression images are not available")
+
+    for name, expected_status in cases.items():
+        with Image.open(after / name) as edited:
+            result = app_module.compare_images(before / name, edited.convert("RGB"), False)
+        assert result.status == expected_status, name
+
+
+def test_v60_recorded_chad_diane_33_34_remain_review():
+    """Keep the recorded stop state for the two unavailable output artifacts."""
+    history = (
+        Path.home()
+        / "Library/Application Support/MyEstatePics AI Editor - Direct/runtime/Data"
+        / "image_history.sqlite3"
+    )
+    if not history.is_file():
+        pytest.skip("Direct production history is not available")
+
+    with sqlite3.connect(history) as connection:
+        rows = {
+            filename: (decision, message)
+            for filename, decision, message in connection.execute(
+                """
+                SELECT filename, system_decision, message
+                FROM image_history
+                WHERE filename IN ('chad-diane-33.jpg', 'chad-diane-34.jpg')
+                ORDER BY id
+                """
+            )
+        }
+
+    assert rows["chad-diane-33.jpg"][0] == "REVIEW"
+    assert "new colored edge/texture structure" in rows["chad-diane-33.jpg"][1]
+    assert rows["chad-diane-34.jpg"][0] == "REVIEW"
+    assert "substantial neutral reconstruction" in rows["chad-diane-34.jpg"][1]
 
 
 def _save_rgb(path, array):

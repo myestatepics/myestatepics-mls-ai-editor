@@ -481,7 +481,7 @@ def possible_bright_window_review_signals(
     output_luminance = luminance_from_rgb(output_arr)
     candidate_mask = (source_luminance >= 0.92) & (source_saturation <= 0.06)
     if float(candidate_mask.mean()) < 0.005:
-        return []
+        return local_bright_glass_review_signals(source_arr, output_arr)
 
     output_blue = output_arr[..., 2] - np.maximum(output_arr[..., 0], output_arr[..., 1])
     output_green = output_arr[..., 1] - np.maximum(output_arr[..., 0], output_arr[..., 2])
@@ -517,6 +517,97 @@ def possible_bright_window_review_signals(
             "Possible fabricated window/exterior detail: "
             f"{', '.join(details)} appeared in a low-information bright source "
             "region. Human review required; no window mask is available."
+        ]
+    return local_bright_glass_review_signals(source_arr, output_arr)
+
+
+def local_bright_glass_review_signals(
+    source_arr: np.ndarray, output_arr: np.ndarray
+) -> list[str]:
+    """Flag small blown glass patches that gain unsupported physical detail.
+
+    The whole-image bright-region check above can dilute a small pane with other
+    highlights.  This local check only considers almost-uniform, near-white
+    source patches.  It requires new texture plus non-sky color or neutral
+    dark detail; smooth blue sky alone cannot satisfy it.
+    """
+    height, width = source_arr.shape[:2]
+    # A fixed local-analysis scale makes the patch thresholds stable across
+    # portrait and landscape MLS dimensions. This is verification data only.
+    if max(height, width) > 768:
+        ratio = 768 / max(height, width)
+        size = (max(1, round(width * ratio)), max(1, round(height * ratio)))
+        source_arr = np.asarray(
+            Image.fromarray(np.rint(source_arr * 255).astype(np.uint8)).resize(
+                size, Image.Resampling.LANCZOS
+            ), dtype=np.float32
+        ) / 255.0
+        output_arr = np.asarray(
+            Image.fromarray(np.rint(output_arr * 255).astype(np.uint8)).resize(
+                size, Image.Resampling.LANCZOS
+            ), dtype=np.float32
+        ) / 255.0
+    source_luminance = luminance_from_rgb(source_arr)
+    source_saturation = saturation_from_rgb(source_arr)
+    output_luminance = luminance_from_rgb(output_arr)
+    output_saturation = saturation_from_rgb(output_arr)
+    height, width = source_luminance.shape
+    patch_size = max(12, min(24, min(height, width) // 32))
+    stride = max(6, patch_size // 2)
+    evidence = np.zeros((height, width), dtype=bool)
+
+    for y in range(0, height - patch_size + 1, stride):
+        for x in range(0, width - patch_size + 1, stride):
+            region = np.s_[y:y + patch_size, x:x + patch_size]
+            source_patch = source_luminance[region]
+            if (
+                float(((source_patch >= 0.94) & (source_saturation[region] <= 0.06)).mean())
+                < 0.95
+                or float(source_patch.std()) > 0.02
+            ):
+                continue
+
+            output_patch = output_arr[region]
+            if float(np.abs(output_patch - source_arr[region]).mean()) < 0.08:
+                continue
+            inner = np.s_[y + 2:y + patch_size - 2, x + 2:x + patch_size - 2]
+            if float(_edge_energy(output_luminance)[inner].mean()) < 0.0001:
+                continue
+
+            green = (
+                (output_patch[..., 1] - output_patch[..., 0] > 0.025)
+                & (output_patch[..., 1] - output_patch[..., 2] > 0.015)
+            )
+            neutral_dark_detail = (
+                (output_saturation[region] < 0.12)
+                & (output_luminance[region] < 0.80)
+            )
+            if float((green | neutral_dark_detail).mean()) < 0.15:
+                continue
+            # Look just beyond the tiny clipped patch for source/output
+            # correspondence. Real scenery can be blown in part of a pane yet
+            # still retain matching shape nearby. A fabricated replacement does
+            # not. The local source must have useful variation before a
+            # correlation conclusion is allowed.
+            outer_y0, outer_y1 = max(0, y - patch_size), min(height, y + 2 * patch_size)
+            outer_x0, outer_x1 = max(0, x - patch_size), min(width, x + 2 * patch_size)
+            source_context = source_luminance[outer_y0:outer_y1, outer_x0:outer_x1]
+            output_context = output_luminance[outer_y0:outer_y1, outer_x0:outer_x1]
+            if source_context.std() > 0.0001 and output_context.std() > 0.0001:
+                correspondence = float(
+                    np.corrcoef(source_context.ravel(), output_context.ravel())[0, 1]
+                )
+                if correspondence > 0.35:
+                    continue
+            evidence[region] = True
+
+    # Overlapping local patches must form enough evidence to avoid reacting to
+    # a single aliasing edge or a small ordinary sharpening artifact.
+    if int(evidence.sum()) >= max(320, int(evidence.size * 0.0007)):
+        return [
+            "Possible fabricated window/exterior detail: new unsupported non-sky "
+            "structure appeared in local low-information bright glass. Human review "
+            "required; no glass mask is available."
         ]
     return []
 
