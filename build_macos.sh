@@ -3,9 +3,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-APP_NAME="MyEstatePics AI Editor - Direct V6.0"
-BUNDLE_ID="com.myestatepics.aieditor.direct"
-RELEASE_VERSION="6.0"
+APP_NAME="MyEstatePics AI Editor - V7.0 Pilot"
+BUNDLE_ID="com.myestatepics.aieditor.v7pilot"
+RELEASE_VERSION="7.0"
 PYTHON="${PYTHON:-}"
 
 if [[ -z "$PYTHON" ]]; then
@@ -23,11 +23,10 @@ if ! "$PYTHON" -m PyInstaller --version >/dev/null 2>&1; then
     exit 1
 fi
 
-echo "Cleaning previous macOS builds..."
-rm -rf build
+echo "Cleaning only the V7 pilot build..."
+rm -rf "build/$APP_NAME" "dist/$APP_NAME.app" "dist/$APP_NAME.dmg"
 mkdir -p dist
-find dist -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-rm -f ./*.spec
+rm -f "./$APP_NAME.spec"
 
 PYINSTALLER_ARGS=(
     --noconfirm
@@ -61,7 +60,7 @@ else
 fi
 
 echo "Building $APP_NAME.app..."
-"$PYTHON" -m PyInstaller "${PYINSTALLER_ARGS[@]}" myestatepics_ai_editor.py
+"$PYTHON" -m PyInstaller "${PYINSTALLER_ARGS[@]}" v7_pilot_editor.py
 
 PLIST="dist/$APP_NAME.app/Contents/Info.plist"
 if [[ ! -f "$PLIST" ]]; then

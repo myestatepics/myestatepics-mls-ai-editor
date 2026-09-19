@@ -20,7 +20,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture()
-def app_module():
+def v6_module():
+    """Load the frozen shared V6 entry point."""
     name = "single_file_editor"
     sys.path.insert(0, str(ROOT))
     spec = importlib.util.spec_from_file_location(name, ROOT / "myestatepics_ai_editor.py")
@@ -32,6 +33,29 @@ def app_module():
         return module
     finally:
         sys.path.remove(str(ROOT))
+
+
+@pytest.fixture()
+def app_module(monkeypatch):
+    """Load the isolated V7 Pilot entry point without touching V6 state."""
+    name = "v7_pilot_editor"
+    monkeypatch.setenv("MYESTATEPICS_V7_PILOT", "1")
+    sys.path.insert(0, str(ROOT))
+    spec = importlib.util.spec_from_file_location(name, ROOT / "v7_pilot_editor.py")
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    try:
+        spec.loader.exec_module(module)
+        return module
+    finally:
+        sys.path.remove(str(ROOT))
+
+
+@pytest.fixture()
+def v7_module(app_module):
+    """Explicit alias for V7-only tests."""
+    return app_module
 
 
 def textured_image(size=(120, 80)):
@@ -80,12 +104,23 @@ def test_mocked_end_to_end_preserves_filename_exif_and_quality_100(tmp_path, app
     image.save(source, format="JPEG", quality=95, exif=exif)
     response = SimpleNamespace(
         data=[SimpleNamespace(b64_json=base64.b64encode(make_png(image)).decode())],
-        usage={"input_tokens": 10, "output_tokens": 20, "total_tokens": 30},
+        usage={
+            "input_tokens": 10,
+            "output_tokens": 20,
+            "total_tokens": 30,
+            "input_tokens_details": {
+                "image_tokens": 8,
+                "cached_image_tokens": 0,
+                "text_tokens": 2,
+                "cached_text_tokens": 0,
+            },
+            "output_tokens_details": {"image_tokens": 20},
+        },
     )
 
     class Images:
         def edit(self, **kwargs):
-            assert kwargs["model"] == "gpt-image-2"
+            assert kwargs["model"] == "gpt-image-2.5-flare"
             assert kwargs["quality"] == "low"
             assert kwargs["output_format"] == "png"
             assert "Never create windows inside mirror reflections." in kwargs["prompt"]
@@ -99,6 +134,7 @@ def test_mocked_end_to_end_preserves_filename_exif_and_quality_100(tmp_path, app
             assert "Exterior detail should be crisp, clear, and naturally contrasted—not soft," in kwargs["prompt"]
             assert "Natural light-blue sky creation or replacement is allowed" in kwargs["prompt"]
             assert "Never invent, add, substitute, or reconstruct unsupported physical exterior" in kwargs["prompt"]
+            assert "Never create a window or opening where none exists in the source image." in kwargs["prompt"]
             return response
 
     summary = app_module.process_batch(SimpleNamespace(images=Images()))
@@ -129,6 +165,12 @@ def test_mocked_end_to_end_preserves_filename_exif_and_quality_100(tmp_path, app
     assert row["quality"] == "low"
     assert float(row["processing_time_seconds"]) >= 0
     assert float(row["api_cost"]) > 0
+    assert row["usage_image_input_tokens"] == "8"
+    assert row["usage_cached_image_input_tokens"] == ""
+    assert row["usage_text_input_tokens"] == "2"
+    assert row["usage_cached_text_input_tokens"] == ""
+    assert row["usage_image_output_tokens"] == "20"
+    assert float(row["calculated_api_cost"]) == pytest.approx(0.000674)
     assert row["destination"] == str(app_module.OUTPUT_DIR)
     assert row["needs_review_reason"] == ""
     assert app_module.HISTORY_DB.exists()
@@ -170,6 +212,246 @@ def test_external_production_prompt_preserves_foundation_and_adds_fidelity_rules
     assert "WHITE-SURFACE PROTECTION" in loaded_prompt
     assert "Do not apply uniform or whole-image brightening." in loaded_prompt
     assert "Do not\nglobally increase saturation or vibrance." in loaded_prompt
+
+
+def test_v7_request_prompt_adds_window_existence_lock_without_changing_v6_prompt(
+    tmp_path, v7_module
+):
+    """The V7-only request layer locks source architecture, not the V6 file."""
+    app_module = v7_module
+    app_module.USER_DATA_DIR = tmp_path / "V7 Pilot Application Support"
+    source = tmp_path / "source.jpg"
+    selection = app_module.build_edit_instruction(app_module.load_prompt(), source)
+
+    assert "Never create a window or opening where none exists in the source image." in selection.instruction
+    assert "A solid wall in the source\nmust remain a solid wall." in selection.instruction
+    assert "Only a real window or glass opening already visible in the source may receive" in selection.instruction
+    assert "Never create a window or opening where none exists in the source image." not in app_module.load_prompt()
+
+
+def _v7_architecture_fixture(*, add_fake_opening=False, dark_opening=False):
+    """Return a room with one real source window and an optional fake wall opening."""
+    source = np.full((120, 180, 3), (168, 164, 156), dtype=np.uint8)
+    source[18:82, 18:82] = (24, 24, 24)  # real window frame
+    source[23:77, 23:77] = (248, 248, 248)  # blown real window
+    output = source.copy()
+    y, x = np.indices((54, 54))
+    output[23:77, 23:77] = np.stack(
+        (
+            55 + (x % 3) * 4,
+            135 + (y % 5) * 5,
+            220 - (x % 4) * 3,
+        ),
+        axis=2,
+    )
+    if add_fake_opening:
+        output[28:94, 102:170] = (18, 18, 18)
+        y, x = np.indices((58, 60))
+        if dark_opening:
+            checker = ((x // 3 + y // 3) % 2)[..., None]
+            fill = np.where(checker == 0, (20, 20, 20), (100, 94, 86))
+        else:
+            fill = np.stack((35 + (x % 6) * 4, 105 + (y % 7) * 9, 210 - (x % 5) * 5), axis=2)
+        output[32:90, 106:166] = fill.astype(np.uint8)
+    return source, output
+
+
+@pytest.mark.parametrize("dark_opening", [False, True])
+def test_v7_fake_window_detector_fails_new_wall_openings(
+    tmp_path, v7_module, dark_opening
+):
+    app_module = v7_module
+    source_arr, output_arr = _v7_architecture_fixture(
+        add_fake_opening=True, dark_opening=dark_opening
+    )
+    source = tmp_path / "solid-wall.jpg"
+    _save_rgb(source, source_arr)
+
+    signals = app_module.fake_window_creation_fail_signals(
+        source_arr.astype(np.float32) / 255.0,
+        output_arr.astype(np.float32) / 255.0,
+    )
+    result = app_module.compare_images(source, Image.fromarray(output_arr), False)
+
+    assert signals == [
+        "FAIL — FAKE WINDOW CREATED: new local opening geometry and "
+        "unsupported structured visual content have no corresponding "
+        "source opening."
+    ]
+    assert result.status == "FAIL"
+    assert any(message.startswith("FAIL — FAKE WINDOW CREATED") for message in result.messages)
+
+
+def test_v7_fake_window_detector_allows_existing_window_view_changes(v7_module):
+    app_module = v7_module
+    source_arr, output_arr = _v7_architecture_fixture()
+    source_rgb = source_arr.astype(np.float32) / 255.0
+    output_rgb = output_arr.astype(np.float32) / 255.0
+
+    # A blown existing window receiving blue sky/exterior detail is allowed.
+    assert app_module.fake_window_creation_fail_signals(source_rgb, output_rgb) == []
+
+    # An existing detailed window can change exposure or exterior appearance.
+    source_rgb[23:77, 23:77] = np.array((0.22, 0.48, 0.72), dtype=np.float32)
+    output_rgb[23:77, 23:77] = np.array((0.30, 0.58, 0.82), dtype=np.float32)
+    assert app_module.fake_window_creation_fail_signals(source_rgb, output_rgb) == []
+
+
+def test_v7_fake_window_detector_ignores_non_window_brightness_changes(v7_module):
+    app_module = v7_module
+    source = np.full((120, 180, 3), (168, 164, 156), dtype=np.uint8)
+    output = source.copy()
+    # Mirror, TV, and artwork regions are not source-wall evidence.
+    source[20:50, 20:50] = (48, 48, 52)
+    output[20:50, 20:50] = (88, 96, 104)
+    source[60:90, 20:50] = (20, 20, 22)
+    output[60:90, 20:50] = (42, 42, 46)
+    checker = np.indices((30, 30)).sum(axis=0) % 2
+    source[30:60, 100:130] = np.where(checker[..., None] == 0, (80, 40, 30), (180, 140, 80))
+    output[30:60, 100:130] = np.clip(source[30:60, 100:130].astype(np.int16) + 18, 0, 255)
+
+    assert app_module.fake_window_creation_fail_signals(
+        source.astype(np.float32) / 255.0, output.astype(np.float32) / 255.0
+    ) == []
+
+
+@pytest.mark.parametrize(
+    ("filename", "expected_status"),
+    [
+        ("1466 N Back LR-13.jpg", "FAIL"),
+        ("1466 N Back LR-53.jpg", "PASS"),
+        ("Inside-4.jpg", "FAIL"),
+    ],
+)
+def test_v7_real_fake_window_regressions_match_authoritative_review(
+    v7_module, filename, expected_status
+):
+    """Existing V7 before/after pairs follow the approved human labels."""
+    app_module = v7_module
+    root = Path("/Users/subratmohapatra/Documents/MyestatePics/2026/V7Test")
+    before = root / "before" / filename
+    after = root / "After" / filename
+    if not before.is_file() or not after.is_file():
+        pytest.skip("Authoritative V7 real-photo fixture is unavailable locally")
+
+    with Image.open(before) as source_image, Image.open(after) as output_image:
+        signals = app_module.fake_window_creation_fail_signals(
+            app_module.image_to_rgb_array(source_image, 1024),
+            app_module.image_to_rgb_array(output_image, 1024),
+        )
+        result = app_module.compare_images(before, output_image.convert("RGB"), False)
+
+    if expected_status == "FAIL":
+        assert signals and signals[0].startswith("FAIL — FAKE WINDOW CREATED")
+        assert result.status == "FAIL"
+        assert any(message.startswith("FAIL — FAKE WINDOW CREATED") for message in result.messages)
+    else:
+        assert signals == []
+        assert result.status == "PASS"
+        assert not any(message.startswith("FAIL — FAKE WINDOW CREATED") for message in result.messages)
+
+
+def test_v7_fake_window_failure_persists_as_failed_with_output(tmp_path, v7_module, monkeypatch):
+    """A saved fake-window output remains a FAILED row after a fresh scan."""
+    app_module = v7_module
+    configure_tmp(app_module, tmp_path)
+    image = textured_image()
+    sources = [
+        app_module.INPUT_DIR / "fake-window-13.jpg",
+        app_module.INPUT_DIR / "fake-window-53.jpg",
+        app_module.INPUT_DIR / "fake-window-inside.jpg",
+    ]
+    for source in sources:
+        image.save(source, format="JPEG", quality=95)
+    fake_reason = (
+        "FAIL — FAKE WINDOW CREATED: new local opening geometry and unsupported "
+        "structured visual content have no corresponding source opening."
+    )
+    monkeypatch.setattr(
+        app_module,
+        "compare_images",
+        lambda *_args, **_kwargs: app_module.VerificationResult(
+            "FAIL", [fake_reason], 1.0, 0.0, 0.0, 0.0, 0.0, False
+        ),
+    )
+
+    class Images:
+        def edit(self, **_kwargs):
+            return SimpleNamespace(
+                data=[SimpleNamespace(b64_json=base64.b64encode(make_png(image)).decode())],
+                usage=None,
+            )
+
+    events = []
+    summary = app_module.process_batch(
+        SimpleNamespace(images=Images()), quality="medium", event=lambda *event: events.append(event)
+    )
+
+    for source in sources:
+        assert (app_module.OUTPUT_DIR / source.name).is_file()
+        assert not (app_module.REVIEW_DIR / source.name).exists()
+        assert app_module.selection_status(source) == "FAILED — FAKE WINDOW CREATED"
+        assert app_module.pending_images([source]) == ([], 1)
+    assert summary.completed == 0
+    assert summary.verification_failed == 3
+    assert summary.review == 0
+    assert summary.failed == 0
+    finished = [payload for kind, payload in events if kind == "finished"]
+    assert len(finished) == 3
+    assert all(payload["status"] == "FAILED" for payload in finished)
+    assert all(payload["fake_window_failed"] is True for payload in finished)
+    with sqlite3.connect(app_module.HISTORY_DB) as connection:
+        records = connection.execute(
+            """SELECT system_decision, implicit_final_label, message
+            FROM image_history WHERE filename LIKE 'fake-window-%'""",
+        ).fetchall()
+    assert records == [("FAILED", "FAILED", fake_reason)] * 3
+
+
+@pytest.mark.parametrize("selected_quality", ["medium", "high"])
+def test_v7_selected_quality_controls_one_direct_image_edit_and_audit(
+    tmp_path, v7_module, selected_quality
+):
+    app_module = v7_module
+    configure_tmp(app_module, tmp_path)
+    app_module.USER_DATA_DIR = tmp_path / "V7 Pilot Application Support"
+    source = app_module.INPUT_DIR / f"{selected_quality}.jpg"
+    image = textured_image()
+    image.save(source, format="JPEG", quality=95)
+    calls = []
+
+    class Images:
+        def edit(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                data=[SimpleNamespace(b64_json=base64.b64encode(make_png(image)).decode())],
+                usage=None,
+            )
+
+    summary = app_module.process_batch(
+        SimpleNamespace(images=Images()), selected_files=[source], quality=selected_quality
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["model"] == "gpt-image-2.5-flare"
+    assert calls[0]["quality"] == selected_quality
+    assert summary.quality == selected_quality
+    assert summary.api_calls == 1
+    with summary.log_path.open(newline="", encoding="utf-8") as handle:
+        row = next(csv.DictReader(handle))
+    assert row["quality"] == selected_quality
+    assert float(row["api_cost"]) == pytest.approx(
+        app_module.estimated_cost_per_image(selected_quality), abs=1e-6
+    )
+
+
+def test_v7_gui_exposes_only_medium_and_high_as_selectable_pilot_qualities(v7_module):
+    app_module = v7_module
+    source = inspect.getsource(app_module.launch_gui)
+    assert app_module.PILOT_QUALITY_OPTIONS == ("medium", "high")
+    assert "[value.upper() for value in PILOT_QUALITY_OPTIONS]" in source
+    assert "quality = self.quality.currentText().lower()" in source
+    assert "quality = PILOT_QUALITY if PILOT_BUILD" not in source
 
 
 def test_v51_hardwood_glare_clarification_and_window_containment_are_preserved(
@@ -286,8 +568,9 @@ def _window_scene_fixture(*, source_window, output_window, textured=False):
 
 
 def test_v60_blown_window_blue_sky_plus_new_structure_routes_review(
-    tmp_path, app_module, monkeypatch
+    tmp_path, v6_module, monkeypatch
 ):
+    app_module = v6_module
     source_arr, output_arr = _window_scene_fixture(
         source_window=(250, 250, 250), output_window=(45, 135, 240), textured=True
     )
@@ -304,7 +587,8 @@ def test_v60_blown_window_blue_sky_plus_new_structure_routes_review(
     assert any("low-information bright source region" in message for message in result.messages)
 
 
-def test_v60_blown_window_remaining_neutral_passes(tmp_path, app_module):
+def test_v60_blown_window_remaining_neutral_passes(tmp_path, v6_module):
+    app_module = v6_module
     source_arr, output_arr = _window_scene_fixture(
         source_window=(250, 250, 250), output_window=(244, 244, 244)
     )
@@ -317,7 +601,8 @@ def test_v60_blown_window_remaining_neutral_passes(tmp_path, app_module):
     assert not any("fabricated window/exterior" in message for message in result.messages)
 
 
-def test_v60_existing_source_scenery_clarification_passes(tmp_path, app_module):
+def test_v60_existing_source_scenery_clarification_passes(tmp_path, v6_module):
+    app_module = v6_module
     source_arr, output_arr = _window_scene_fixture(
         source_window=(65, 125, 180), output_window=(75, 145, 205), textured=True
     )
@@ -334,8 +619,9 @@ def test_v60_existing_source_scenery_clarification_passes(tmp_path, app_module):
     assert not any("fabricated window/exterior" in message for message in result.messages)
 
 
-def test_v60_small_blown_glass_patch_with_new_physical_detail_routes_review(app_module):
+def test_v60_small_blown_glass_patch_with_new_physical_detail_routes_review(v6_module):
     """A small pane must not be diluted by unrelated bright pixels."""
+    app_module = v6_module
     source = np.full((120, 180, 3), 250, dtype=np.float32) / 255.0
     output = source.copy()
     source[36:72, 72:108] = 250 / 255.0
@@ -419,13 +705,14 @@ def test_live_status_text_is_production_facing(app_module):
     assert app_module.completed_status_text(15, 15) == "Completed — 15 of 15"
 
 
-def test_v52_real_mrinal_window_verifier_regression(app_module):
+def test_v52_real_mrinal_window_verifier_regression(v6_module):
     """Keep the approved real BEFORE/AFTER verifier cases reproducible locally.
 
     These are intentionally read-only production-image regressions.  They are
     skipped on machines without the separately stored image set, rather than
     copying customer images into the repository.
     """
+    app_module = v6_module
     root = Path(
         "/Users/subratmohapatra/Documents/MyestatePics/2026/Mrinal-HAri-1stsept"
     )
@@ -447,8 +734,9 @@ def test_v52_real_mrinal_window_verifier_regression(app_module):
         assert result.status == expected_status, name
 
 
-def test_v52_real_lincoln_verifier_regression(app_module):
+def test_v52_real_lincoln_verifier_regression(v6_module):
     """All 14 existing Lincoln V5.2 edits remain out of NeedsReview."""
+    app_module = v6_module
     root = Path(
         "/Users/subratmohapatra/Documents/MyestatePics/2026/New Folder With Items/"
         "712 E Lincoln Madision Heights "
@@ -465,8 +753,9 @@ def test_v52_real_lincoln_verifier_regression(app_module):
         assert result.status == "PASS", name
 
 
-def test_v60_real_chad_diane_integrity_regressions(app_module):
+def test_v60_real_chad_diane_integrity_regressions(v6_module):
     """Read-only regressions for the confirmed Chad–Diane production batch."""
+    app_module = v6_module
     root = Path("/Users/subratmohapatra/Documents/MyestatePics/2026/09-11-chad-diane")
     before = root / "09-11-chad-diane-LR"
     after = root / "09-11-chad-diane-Prefinal"
@@ -554,7 +843,8 @@ def test_v52_pilot_failure_regression_patterns_route_to_review(
     assert any(expected_signal in message.casefold() for message in result.messages)
 
 
-def test_v52_upscale_returns_exact_source_dimensions_without_crop(tmp_path, app_module):
+def test_v52_upscale_returns_exact_source_dimensions_without_crop(tmp_path, v6_module):
+    app_module = v6_module
     source = tmp_path / "original-6000x4000.jpg"
     textured_image((600, 400)).save(source, format="JPEG", quality=95, dpi=(300, 300))
     generated = textured_image((153, 102))
@@ -569,7 +859,8 @@ def test_v52_upscale_returns_exact_source_dimensions_without_crop(tmp_path, app_
         assert result.info["dpi"] == pytest.approx((300, 300), abs=0.1)
 
 
-def test_v52_upscale_refuses_aspect_ratio_distortion(tmp_path, app_module):
+def test_v52_upscale_refuses_aspect_ratio_distortion(tmp_path, v6_module):
+    app_module = v6_module
     source = tmp_path / "original.jpg"
     textured_image((600, 400)).save(source, format="JPEG")
 
@@ -578,8 +869,9 @@ def test_v52_upscale_refuses_aspect_ratio_distortion(tmp_path, app_module):
 
 
 def test_direct_images_edit_is_the_only_production_request(
-    tmp_path, app_module, caplog
+    tmp_path, v7_module, caplog
 ):
+    app_module = v7_module
     configure_tmp(app_module, tmp_path)
     source = app_module.INPUT_DIR / "direct.jpg"
     image = textured_image()
@@ -614,31 +906,213 @@ def test_direct_images_edit_is_the_only_production_request(
     assert usage.total_tokens is None
     assert len(calls) == 1
     request = calls[0]
-    assert request["model"] == "gpt-image-2"
+    assert request["model"] == "gpt-image-2.5-flare"
     assert request["quality"] == "low"
     assert request["size"] == "1536x1024"
     assert request["output_format"] == "png"
+    assert "mask" not in request
     assert "api_path=/v1/images/edits" in caplog.text
     assert "requested_size=1536x1024" in caplog.text
     assert "returned_size=120x80" in caplog.text
-    assert "cost_basis=estimated" in caplog.text
+    assert "calculated_cost=unavailable" in caplog.text
     assert "gpt-5.6" not in caplog.text
 
 
-def test_application_and_prompt_versions_are_independent(app_module):
-    assert app_module.PROGRAM_VERSION == "6.0"
+def test_v7_delivers_native_api_dimensions_with_one_premium_finish(
+    tmp_path, v7_module, monkeypatch
+):
+    """V7 does not manufacture source-sized pixels after the API response."""
+    app_module = v7_module
+    configure_tmp(app_module, tmp_path)
+    source = app_module.INPUT_DIR / "source-600x400.jpg"
+    textured_image((600, 400)).save(source, format="JPEG", quality=95, dpi=(300, 300))
+    native_api_image = textured_image((153, 102))
+    calls = []
+    premium_calls = []
+    original_finish = app_module.apply_premium_finish
+
+    def finish_once(image):
+        premium_calls.append(image.size)
+        return original_finish(image)
+
+    monkeypatch.setattr(app_module, "apply_premium_finish", finish_once)
+    monkeypatch.setattr(
+        app_module,
+        "compare_images",
+        lambda *_args, **_kwargs: app_module.VerificationResult(
+            "PASS", ["Deterministic checks passed."], 1.0, 0.0, 0.0, 0.0, 0.0, False
+        ),
+    )
+
+    class Images:
+        def edit(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                data=[SimpleNamespace(b64_json=base64.b64encode(make_png(native_api_image)).decode())],
+                usage=None,
+            )
+
+    summary = app_module.process_batch(SimpleNamespace(images=Images()), quality="medium")
+
+    assert summary.completed == 1
+    assert len(calls) == 1
+    assert calls[0]["model"] == "gpt-image-2.5-flare"
+    assert calls[0]["quality"] == "medium"
+    assert "mask" not in calls[0]
+    assert premium_calls == [(153, 102)]
+    with Image.open(app_module.OUTPUT_DIR / source.name) as result:
+        assert result.size == (153, 102)
+        assert result.info["dpi"] == pytest.approx((300, 300), abs=0.1)
+
+
+def test_v7_does_not_automatically_retry_a_transient_image_edit(
+    tmp_path, v7_module
+):
+    app_module = v7_module
+    configure_tmp(app_module, tmp_path)
+    source = app_module.INPUT_DIR / "single-attempt.jpg"
+    textured_image().save(source, format="JPEG", quality=95)
+    calls = []
+
+    class TemporaryFailure(Exception):
+        status_code = 503
+
+    class Images:
+        def edit(self, **kwargs):
+            calls.append(kwargs)
+            raise TemporaryFailure("temporary")
+
+    with pytest.raises(TemporaryFailure):
+        app_module.call_image_editor(
+            SimpleNamespace(images=Images()), source, "Edit conservatively."
+        )
+
+    assert app_module.MAX_RETRIES == 1
+    assert len(calls) == 1
+
+
+def test_gpt_image_25_usage_is_split_and_costed_for_a_single_edit(v7_module):
+    app_module = v7_module
+    response = SimpleNamespace(
+        usage={
+            "input_tokens": 350,
+            "output_tokens": 343,
+            "total_tokens": 693,
+            "input_tokens_details": {
+                "image_tokens": 300,
+                "cached_image_tokens": 10,
+                "text_tokens": 50,
+                "cached_text_tokens": 5,
+            },
+            "output_tokens_details": {"image_tokens": 343},
+        }
+    )
+
+    usage = app_module.extract_usage(response)
+
+    assert usage.image_input_tokens == 300
+    assert usage.cached_image_input_tokens == 10
+    assert usage.text_input_tokens == 50
+    assert usage.cached_text_input_tokens == 5
+    assert usage.image_output_tokens == 343
+    assert app_module.measured_image_edit_cost(usage) == pytest.approx(0.01296625)
+
+
+def test_gpt_image_25_cost_is_unavailable_without_token_type_details(v7_module):
+    app_module = v7_module
+    usage = app_module.extract_usage(
+        SimpleNamespace(usage={"input_tokens": 10, "output_tokens": 20})
+    )
+
+    assert app_module.measured_image_edit_cost(usage) is None
+
+
+def test_application_and_prompt_versions_are_independent(v7_module):
+    app_module = v7_module
+    assert app_module.PROGRAM_VERSION == "7.0"
     assert app_module.PROMPT_VERSION == "V6.0"
-    assert app_module.RELEASE_DATE == "September 2, 2026"
-    assert app_module.DISPLAY_APPLICATION_NAME == "MyEstatePics AI Editor - Direct V6.0"
-    assert app_module.REVIEW_PDF_VERSION == "V6.0"
+    assert app_module.RELEASE_DATE == "September 18, 2026"
+    assert app_module.DISPLAY_APPLICATION_NAME == "MyEstatePics AI Editor - V7.0 Pilot"
+    assert app_module.REVIEW_PDF_VERSION == "V7.0"
+    assert app_module.PILOT_QUALITY == "medium"
 
 
-def test_v60_packaging_metadata_matches_application_version():
+def test_v70_packaging_metadata_matches_application_version():
     macos_build = (ROOT / "build_macos.sh").read_text(encoding="utf-8")
     dmg_build = (ROOT / "build_dmg.sh").read_text(encoding="utf-8")
-    assert 'APP_NAME="MyEstatePics AI Editor - Direct V6.0"' in macos_build
-    assert 'RELEASE_VERSION="6.0"' in macos_build
-    assert 'APP_NAME="MyEstatePics AI Editor - Direct V6.0"' in dmg_build
+    assert 'APP_NAME="MyEstatePics AI Editor - V7.0 Pilot"' in macos_build
+    assert 'RELEASE_VERSION="7.0"' in macos_build
+    assert "v7_pilot_editor.py" in macos_build
+    assert 'APP_NAME="MyEstatePics AI Editor - V7.0 Pilot"' in dmg_build
+    runtime_hook = (ROOT / "packaging" / "direct_runtime.py").read_text(encoding="utf-8")
+    assert 'MYESTATEPICS_APPLICATION_NAME"] = "MyEstatePics AI Editor - V7.0 Pilot"' in runtime_hook
+    assert 'MYESTATEPICS_V7_PILOT"] = "1"' in runtime_hook
+
+
+def test_v7_pilot_selected_input_and_output_are_authoritative(tmp_path, v7_module, monkeypatch):
+    """A selected V7 pilot image gets exactly one request and one output only."""
+    app_module = v7_module
+    pilot_input = tmp_path / "Pilot Input"
+    pilot_output = tmp_path / "Pilot Output"
+    pilot_review = tmp_path / "Pilot Internal Review"
+    pilot_error = tmp_path / "Pilot Internal Error"
+    pilot_logs = tmp_path / "Pilot Internal Logs"
+    app_module.configure_runtime_paths(
+        pilot_input, pilot_output, pilot_review, pilot_error, pilot_logs
+    )
+    for directory in (pilot_input, pilot_output, pilot_review, pilot_error, pilot_logs):
+        directory.mkdir(parents=True, exist_ok=True)
+    app_module.PROMPT_FILE = ROOT / "prompts" / "mls_production.txt"
+    source = pilot_input / "selected.jpg"
+    unselected = pilot_input / "not-selected.jpg"
+    textured_image().save(source, format="JPEG", quality=95)
+    textured_image().save(unselected, format="JPEG", quality=95)
+    v6_output = tmp_path / "V6 PreFinal" / source.name
+    calls = []
+    response = SimpleNamespace(
+        data=[SimpleNamespace(b64_json=base64.b64encode(make_png(textured_image())).decode())],
+        usage={
+            "input_tokens": 30,
+            "output_tokens": 20,
+            "total_tokens": 50,
+            "input_tokens_details": {"image_tokens": 8, "text_tokens": 22},
+            "output_tokens_details": {"image_tokens": 20},
+        },
+    )
+
+    class Images:
+        def edit(self, **kwargs):
+            calls.append(kwargs)
+            return response
+
+    monkeypatch.setattr(
+        app_module,
+        "compare_images",
+        lambda *_args: app_module.VerificationResult(
+            "REVIEW", ["Pilot review signal"], 1.0, 0.0, 0.0, 0.0, 0.0, False
+        ),
+    )
+    discovered, skipped = app_module.pending_images([source])
+    assert discovered == [source.resolve()]
+    assert skipped == 0
+
+    summary = app_module.process_batch(
+        SimpleNamespace(images=Images()), selected_files=[source], quality="medium"
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["model"] == "gpt-image-2.5-flare"
+    assert calls[0]["quality"] == "medium"
+    assert calls[0]["size"] == "1536x1024"
+    assert summary.review == 1
+    assert (pilot_output / source.name).is_file()
+    assert not (pilot_output / unselected.name).exists()
+    assert not (pilot_review / source.name).exists()
+    assert not v6_output.exists()
+    assert app_module.PROMPT_FILE.read_bytes()
+    assert app_module.hashlib.sha256(app_module.PROMPT_FILE.read_bytes()).hexdigest() == (
+        "065b48e3d0a42fb6dc7a7e13381323859efd0af16b778d1aa0fd00ebce5f4598"
+    )
 
 
 def test_v51_batch_uses_no_filename_triggered_window_rules(tmp_path, app_module):
@@ -660,7 +1134,7 @@ def test_v51_batch_uses_no_filename_triggered_window_rules(tmp_path, app_module)
     summary = app_module.process_batch(SimpleNamespace(images=Images()))
     assert summary.api_calls == 1
     assert len(calls) == 1
-    assert calls[0]["model"] == "gpt-image-2"
+    assert calls[0]["model"] == "gpt-image-2.5-flare"
     assert "APPROVED LOCAL EDITING LESSONS" in calls[0]["prompt"]
     assert "WINDOW_IDENTITY_001" not in calls[0]["prompt"]
     assert "WINDOW_SKY_001" not in calls[0]["prompt"]
@@ -745,8 +1219,8 @@ def test_batch_review_pdfs_are_local_ordered_and_preserve_failed_position(
         inputs, outputs, "test-review-pdfs"
     )
 
-    assert before_pdf.name == "MyEstatePics_V6.0_BEFORE.pdf"
-    assert after_pdf.name == "MyEstatePics_V6.0_AFTER.pdf"
+    assert before_pdf.name == "MyEstatePics_V7.0_BEFORE.pdf"
+    assert after_pdf.name == "MyEstatePics_V7.0_AFTER.pdf"
     assert before_pdf.parent == after_pdf.parent
     assert before_pdf.read_bytes().startswith(b"%PDF")
     assert after_pdf.read_bytes().startswith(b"%PDF")

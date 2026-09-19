@@ -3,10 +3,10 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-APP_NAME="MyEstatePics AI Editor - Direct V6.0"
+APP_NAME="MyEstatePics AI Editor - V7.0 Pilot"
 APP_PATH="dist/$APP_NAME.app"
 DMG_PATH="dist/$APP_NAME.dmg"
-STAGING_DIR="build/dmg"
+STAGING_DIR="build/dmg-v7-pilot"
 
 if [[ ! -d "$APP_PATH" ]]; then
     echo "$APP_PATH does not exist. Run ./build_macos.sh first."
