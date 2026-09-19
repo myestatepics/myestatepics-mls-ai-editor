@@ -58,6 +58,30 @@ def v7_module(app_module):
     return app_module
 
 
+@pytest.fixture()
+def sunburst_module(monkeypatch):
+    """Load the isolated V7 Sunburst entry point and its frozen Flare core."""
+    name = "v7_sunburst_pilot_editor"
+    monkeypatch.setenv("MYESTATEPICS_V7_PILOT", "1")
+    monkeypatch.setenv(
+        "MYESTATEPICS_APPLICATION_NAME",
+        "MyEstatePics AI Editor - V7.0 Sunburst Pilot",
+    )
+    sys.modules.pop("v7_pilot_editor", None)
+    sys.path.insert(0, str(ROOT))
+    spec = importlib.util.spec_from_file_location(
+        name, ROOT / "v7_sunburst_pilot_editor.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    try:
+        spec.loader.exec_module(module)
+        return module
+    finally:
+        sys.path.remove(str(ROOT))
+
+
 def textured_image(size=(120, 80)):
     width, height = size
     y, x = np.indices((height, width))
@@ -452,6 +476,63 @@ def test_v7_gui_exposes_only_medium_and_high_as_selectable_pilot_qualities(v7_mo
     assert "[value.upper() for value in PILOT_QUALITY_OPTIONS]" in source
     assert "quality = self.quality.currentText().lower()" in source
     assert "quality = PILOT_QUALITY if PILOT_BUILD" not in source
+
+
+@pytest.mark.parametrize("quality", ("medium", "high"))
+def test_v7_sunburst_changes_only_the_explicit_images_edit_model(
+    tmp_path, sunburst_module, quality
+):
+    flare_source = (ROOT / "v7_pilot_editor.py").read_text(encoding="utf-8")
+    sunburst_source = (ROOT / "v7_sunburst_pilot_editor.py").read_text(
+        encoding="utf-8"
+    )
+    app_module = sunburst_module._flare
+    configure_tmp(app_module, tmp_path)
+    source = app_module.INPUT_DIR / "pilot.jpg"
+    textured_image().save(source, format="JPEG")
+    calls = []
+
+    class Images:
+        def edit(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                data=[SimpleNamespace(b64_json=base64.b64encode(make_png(textured_image())).decode())],
+                usage=None,
+            )
+
+    app_module.call_image_editor(
+        SimpleNamespace(images=Images()), source, app_module.load_prompt(), quality
+    )
+
+    assert 'MODEL = "gpt-image-2.5-flare"' in flare_source
+    assert sunburst_module.SUNBURST_MODEL == "gpt-image-2.5-sunburst"
+    assert app_module.MODEL == "gpt-image-2.5-sunburst"
+    assert app_module.load_prompt() == sunburst_module._flare.load_prompt()
+    assert len(calls) == 1
+    assert calls[0]["model"] == "gpt-image-2.5-sunburst"
+    assert calls[0]["quality"] == quality
+    assert "mask" not in calls[0]
+    assert app_module.MAX_RETRIES == 1
+
+
+def test_v7_production_packaging_is_separate_from_flare_and_v6():
+    macos_build = (ROOT / "build_macos.sh").read_text(encoding="utf-8")
+    dmg_build = (ROOT / "build_dmg.sh").read_text(encoding="utf-8")
+    runtime_hook = (ROOT / "packaging" / "direct_runtime.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'APP_NAME="MyEstatePics AI Editor - V7.0"' in macos_build
+    assert "com.myestatepics.aieditor.v7" in macos_build
+    assert "v7_editor.py" in macos_build
+    assert 'APP_NAME="MyEstatePics AI Editor - V7.0"' in dmg_build
+    assert "MyEstatePics AI Editor - V7.0" in runtime_hook
+    assert "gpt-image-2.5-flare" in (ROOT / "v7_pilot_editor.py").read_text(
+        encoding="utf-8"
+    )
+    assert "gpt-image-2.5-sunburst" in (
+        ROOT / "v7_sunburst_pilot_editor.py"
+    ).read_text(encoding="utf-8")
 
 
 def test_v51_hardwood_glare_clarification_and_window_containment_are_preserved(
@@ -1040,12 +1121,12 @@ def test_application_and_prompt_versions_are_independent(v7_module):
 def test_v70_packaging_metadata_matches_application_version():
     macos_build = (ROOT / "build_macos.sh").read_text(encoding="utf-8")
     dmg_build = (ROOT / "build_dmg.sh").read_text(encoding="utf-8")
-    assert 'APP_NAME="MyEstatePics AI Editor - V7.0 Pilot"' in macos_build
+    assert 'APP_NAME="MyEstatePics AI Editor - V7.0"' in macos_build
     assert 'RELEASE_VERSION="7.0"' in macos_build
-    assert "v7_pilot_editor.py" in macos_build
-    assert 'APP_NAME="MyEstatePics AI Editor - V7.0 Pilot"' in dmg_build
+    assert "v7_editor.py" in macos_build
+    assert 'APP_NAME="MyEstatePics AI Editor - V7.0"' in dmg_build
     runtime_hook = (ROOT / "packaging" / "direct_runtime.py").read_text(encoding="utf-8")
-    assert 'MYESTATEPICS_APPLICATION_NAME"] = "MyEstatePics AI Editor - V7.0 Pilot"' in runtime_hook
+    assert 'MYESTATEPICS_APPLICATION_NAME"] = "MyEstatePics AI Editor - V7.0"' in runtime_hook
     assert 'MYESTATEPICS_V7_PILOT"] = "1"' in runtime_hook
 
 

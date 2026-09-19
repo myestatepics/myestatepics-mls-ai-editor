@@ -3,8 +3,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-APP_NAME="MyEstatePics AI Editor - V7.0 Pilot"
-BUNDLE_ID="com.myestatepics.aieditor.v7pilot"
+APP_NAME="MyEstatePics AI Editor - V7.0"
+BUNDLE_ID="com.myestatepics.aieditor.v7"
 RELEASE_VERSION="7.0"
 PYTHON="${PYTHON:-}"
 
@@ -23,7 +23,7 @@ if ! "$PYTHON" -m PyInstaller --version >/dev/null 2>&1; then
     exit 1
 fi
 
-echo "Cleaning only the V7 pilot build..."
+echo "Cleaning only the V7 production build..."
 rm -rf "build/$APP_NAME" "dist/$APP_NAME.app" "dist/$APP_NAME.dmg"
 mkdir -p dist
 rm -f "./$APP_NAME.spec"
@@ -60,7 +60,7 @@ else
 fi
 
 echo "Building $APP_NAME.app..."
-"$PYTHON" -m PyInstaller "${PYINSTALLER_ARGS[@]}" v7_pilot_editor.py
+"$PYTHON" -m PyInstaller "${PYINSTALLER_ARGS[@]}" v7_editor.py
 
 PLIST="dist/$APP_NAME.app/Contents/Info.plist"
 if [[ ! -f "$PLIST" ]]; then
