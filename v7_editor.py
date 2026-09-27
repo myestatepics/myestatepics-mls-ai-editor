@@ -50,7 +50,7 @@ from typing import Any
 
 import numpy as np
 from openai import OpenAI
-from PIL import Image, ImageFilter
+from PIL import Image, ImageCms, ImageFilter, ImageOps
 from dotenv import dotenv_values, load_dotenv
 from editing_agent import EditingAgent, RuleSelection
 from reportlab.lib import colors
@@ -1072,15 +1072,19 @@ def call_image_editor(
                 attempt,
                 MAX_RETRIES,
             )
-            with input_file.open("rb") as image_file:
-                response = client.images.edit(
-                    model=MODEL,
-                    image=image_file,
-                    prompt=full_prompt,
-                    size=requested_size,
-                    quality=quality,
-                    output_format=API_OUTPUT_FORMAT,
-                )
+            upload_file = prepare_api_upload(input_file)
+            try:
+                with upload_file.open("rb") as image_file:
+                    response = client.images.edit(
+                        model=MODEL,
+                        image=image_file,
+                        prompt=full_prompt,
+                        size=requested_size,
+                        quality=quality,
+                        output_format=API_OUTPUT_FORMAT,
+                    )
+            finally:
+                upload_file.unlink(missing_ok=True)
 
             image_bytes = base64.b64decode(response.data[0].b64_json)
             with Image.open(BytesIO(image_bytes)) as returned_image:
@@ -1138,6 +1142,45 @@ def call_image_editor(
         raise last_error
 
     raise RuntimeError("Image edit failed without an API error.")
+
+
+def prepare_api_upload(input_file: Path) -> Path:
+    """Create a temporary conventional RGB/sRGB JPEG for the Images Edit upload."""
+    descriptor, temporary_name = tempfile.mkstemp(suffix=".jpg", prefix="myestatepics_upload_")
+    os.close(descriptor)
+    upload_file = Path(temporary_name)
+    try:
+        with Image.open(input_file) as source:
+            image = ImageOps.exif_transpose(source)
+            icc_bytes = image.info.get("icc_profile")
+            srgb_profile_bytes: bytes | None = None
+            if icc_bytes:
+                try:
+                    source_profile = ImageCms.ImageCmsProfile(BytesIO(icc_bytes))
+                    srgb_profile = ImageCms.createProfile("sRGB")
+                    image = ImageCms.profileToProfile(
+                        image, source_profile, srgb_profile, outputMode="RGB"
+                    )
+                    srgb_profile_bytes = ImageCms.ImageCmsProfile(srgb_profile).tobytes()
+                except Exception:
+                    image = image.convert("RGB")
+            elif image.mode == "RGBA":
+                background = Image.new("RGB", image.size, "white")
+                background.paste(image, mask=image.getchannel("A"))
+                image = background
+            else:
+                image = image.convert("RGB")
+            image.save(
+                upload_file,
+                format="JPEG",
+                quality=95,
+                subsampling=0,
+                icc_profile=srgb_profile_bytes,
+            )
+        return upload_file
+    except Exception:
+        upload_file.unlink(missing_ok=True)
+        raise
 
 
 def get_preserved_exif(input_file: Path, output_size: tuple[int, int]) -> bytes | None:

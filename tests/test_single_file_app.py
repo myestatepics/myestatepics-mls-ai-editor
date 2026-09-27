@@ -20,6 +20,89 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture()
+def v7_production_module(monkeypatch):
+    monkeypatch.setenv("MYESTATEPICS_V7_PRODUCTION", "1")
+    spec = importlib.util.spec_from_file_location("v7_editor_test", ROOT / "v7_editor.py")
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_v7_upload_normalization_preserves_source_and_cleans_up(tmp_path, v7_production_module):
+    source = tmp_path / "sony.jpg"
+    Image.new("RGB", (600, 400), (120, 90, 60)).save(source, quality=93)
+    original = source.read_bytes()
+    upload = v7_production_module.prepare_api_upload(source)
+    with Image.open(upload) as normalized:
+        assert normalized.format == "JPEG"
+        assert normalized.mode == "RGB"
+        assert normalized.size == (600, 400)
+    assert source.read_bytes() == original
+    upload.unlink()
+    assert not upload.exists()
+
+
+def test_v7_upload_normalization_converts_readable_icc_to_srgb(tmp_path, v7_production_module):
+    source = tmp_path / "profiled.jpg"
+    profile = v7_production_module.ImageCms.ImageCmsProfile(
+        v7_production_module.ImageCms.createProfile("sRGB")
+    ).tobytes()
+    Image.new("RGB", (320, 240), (80, 120, 160)).save(source, icc_profile=profile)
+    upload = v7_production_module.prepare_api_upload(source)
+    try:
+        with Image.open(upload) as normalized:
+            assert normalized.mode == "RGB"
+            assert normalized.size == (320, 240)
+            assert normalized.info.get("icc_profile")
+    finally:
+        upload.unlink(missing_ok=True)
+
+
+def test_v7_upload_temp_is_cleaned_after_images_edit_failure(tmp_path, v7_production_module):
+    source = tmp_path / "no-profile.jpg"
+    Image.new("RGB", (640, 480), (90, 110, 130)).save(source)
+    original = source.read_bytes()
+    upload_paths: list[Path] = []
+
+    class FailingImages:
+        def edit(self, **kwargs):
+            upload_paths.append(Path(kwargs["image"].name))
+            raise RuntimeError("offline API failure")
+
+    with pytest.raises(RuntimeError, match="offline API failure"):
+        v7_production_module.call_image_editor(
+            SimpleNamespace(images=FailingImages()), source, "offline prompt", "medium"
+        )
+
+    assert len(upload_paths) == 1
+    assert not upload_paths[0].exists()
+    assert source.read_bytes() == original
+
+
+def test_v7_upload_normalization_keeps_one_api_request_and_cleans_up(tmp_path, v7_production_module):
+    source = tmp_path / "source.jpg"
+    Image.new("RGB", (640, 480), (70, 100, 140)).save(source)
+    upload_paths: list[Path] = []
+    response_png = base64.b64encode(make_png(Image.new("RGB", (1536, 1024)))).decode()
+
+    class Images:
+        def edit(self, **kwargs):
+            upload_paths.append(Path(kwargs["image"].name))
+            assert kwargs["model"] == "gpt-image-2.5-sunburst"
+            assert kwargs["quality"] == "medium"
+            return SimpleNamespace(data=[SimpleNamespace(b64_json=response_png)])
+
+    image_bytes, _size, _usage = v7_production_module.call_image_editor(
+        SimpleNamespace(images=Images()), source, "offline prompt", "medium"
+    )
+
+    assert image_bytes
+    assert len(upload_paths) == 1
+    assert not upload_paths[0].exists()
+
+
+@pytest.fixture()
 def v6_module():
     """Load the frozen shared V6 entry point."""
     name = "single_file_editor"
@@ -1127,7 +1210,7 @@ def test_v70_packaging_metadata_matches_application_version():
     assert 'APP_NAME="MyEstatePics AI Editor - V7.0"' in dmg_build
     runtime_hook = (ROOT / "packaging" / "direct_runtime.py").read_text(encoding="utf-8")
     assert 'MYESTATEPICS_APPLICATION_NAME"] = "MyEstatePics AI Editor - V7.0"' in runtime_hook
-    assert 'MYESTATEPICS_V7_PILOT"] = "1"' in runtime_hook
+    assert 'MYESTATEPICS_V7_PRODUCTION"] = "1"' in runtime_hook
 
 
 def test_v7_pilot_selected_input_and_output_are_authoritative(tmp_path, v7_module, monkeypatch):
