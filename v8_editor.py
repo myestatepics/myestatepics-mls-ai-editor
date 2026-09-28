@@ -7,13 +7,18 @@ import shutil
 import subprocess
 import tempfile
 import time
+import base64
 from dataclasses import dataclass, field
+from io import BytesIO
 from pathlib import Path
 from typing import Callable, Iterable
 
 # Ensure V8 has independent Application Support data before importing the V7 engine.
 os.environ.setdefault("MYESTATEPICS_APPLICATION_NAME", "MyEstatePics AI Editor - V8.0")
 import v7_editor as core
+from PIL import Image, ImageCms, ImageOps
+import pillow_heif
+pillow_heif.register_heif_opener()
 
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtWidgets import (QApplication, QComboBox, QFileDialog,
@@ -27,7 +32,7 @@ QUALITY_OPTIONS = ("medium", "high")
 INTERIOR_PROMPT = Path(core.PROMPT_FILE)
 EXTERIOR_PROMPT = Path(__file__).with_name("prompts") / "v8_exterior.txt"
 TWILIGHT_PROMPT = Path(__file__).with_name("prompts") / "v8_twilight.txt"
-SUPPORTED_EXTENSIONS = core.SUPPORTED_EXTENSIONS
+SUPPORTED_EXTENSIONS = core.SUPPORTED_EXTENSIONS | {".heic", ".heif"}
 
 
 @dataclass(frozen=True)
@@ -37,8 +42,8 @@ class V8Job:
 
     @property
     def output_name(self) -> str:
-        return (f"{self.source.stem}-TWILIGHT{self.source.suffix}" if self.kind == "twilight"
-                else self.source.name)
+        stem = f"{self.source.stem}-TWILIGHT" if self.kind == "twilight" else self.source.stem
+        return f"{stem}.JPG" if self.source.suffix.lower() in {".heic", ".heif"} else f"{stem}{self.source.suffix}"
 
 
 @dataclass
@@ -57,7 +62,10 @@ class V8Summary:
 
 
 def supported_images(folder: Path) -> list[Path]:
-    return sorted((p.resolve() for p in Path(folder).iterdir()
+    folder = Path(folder)
+    if not folder.is_dir():
+        return []
+    return sorted((p.resolve() for p in folder.iterdir()
                    if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS),
                   key=lambda p: p.name.casefold())
 
@@ -65,10 +73,14 @@ def supported_images(folder: Path) -> list[Path]:
 def finder_tags(path: Path) -> tuple[str, ...]:
     """Read Finder tags locally; unavailable metadata simply means no tag."""
     try:
-        raw = os.getxattr(path, "com.apple.metadata:_kMDItemUserTags")
+        # The frozen macOS Python runtime does not expose os.getxattr, while
+        # /usr/bin/xattr is present on supported macOS installations.
+        result = subprocess.run(["xattr", "-px", "com.apple.metadata:_kMDItemUserTags", str(path)],
+                                capture_output=True, text=True, check=True)
+        raw = bytes.fromhex("".join(result.stdout.split()))
         values = plistlib.loads(raw)
         return tuple(str(value).split("\n", 1)[0] for value in values)
-    except (OSError, ValueError, plistlib.InvalidFileException):
+    except (OSError, ValueError, subprocess.CalledProcessError, plistlib.InvalidFileException):
         return ()
 
 
@@ -102,6 +114,43 @@ def prompt_for(job: V8Job, landscape: str, distractions: str) -> str:
     return base + exterior_instruction(landscape, distractions)
 
 
+def prepare_v8_api_upload(input_file: Path) -> Path:
+    """Create a temporary RGB/sRGB JPEG for JPEG, HEIC, and HEIF inputs."""
+    fd, temporary_name = tempfile.mkstemp(suffix=".jpg", prefix="myestatepics_v8_upload_")
+    os.close(fd); upload = Path(temporary_name)
+    try:
+        with Image.open(input_file) as source:
+            image = ImageOps.exif_transpose(source)
+            profile_bytes = image.info.get("icc_profile"); srgb_bytes = None
+            if profile_bytes:
+                try:
+                    source_profile = ImageCms.ImageCmsProfile(BytesIO(profile_bytes)); srgb = ImageCms.createProfile("sRGB")
+                    image = ImageCms.profileToProfile(image, source_profile, srgb, outputMode="RGB")
+                    srgb_bytes = ImageCms.ImageCmsProfile(srgb).tobytes()
+                except Exception:
+                    image = image.convert("RGB")
+            elif image.mode == "RGBA":
+                background = Image.new("RGB", image.size, "white"); background.paste(image, mask=image.getchannel("A")); image = background
+            else:
+                image = image.convert("RGB")
+            image.save(upload, "JPEG", quality=95, subsampling=0, icc_profile=srgb_bytes)
+        return upload
+    except Exception:
+        upload.unlink(missing_ok=True); raise
+
+
+def call_v8_image_editor(client, input_file: Path, prompt: str, quality: str):
+    """Exactly one existing direct Images Edit call, using V8's HEIC-safe upload."""
+    upload = prepare_v8_api_upload(input_file)
+    try:
+        with upload.open("rb") as image_file:
+            response = client.images.edit(model=MODEL, image=image_file, prompt=prompt,
+                size=core.choose_native_size(input_file), quality=quality, output_format=core.API_OUTPUT_FORMAT)
+    finally:
+        upload.unlink(missing_ok=True)
+    return base64.b64decode(response.data[0].b64_json), core.choose_native_size(input_file), core.extract_usage(response)
+
+
 class ComparisonCache:
     """Private per-batch evidence; never read reports from live deliverables."""
     def __init__(self) -> None:
@@ -126,10 +175,12 @@ class ComparisonCache:
         shutil.rmtree(self.root, ignore_errors=True)
 
 
-def build_jobs(interior_folder: Path, exterior_folder: Path) -> tuple[list[V8Job], list[Path]]:
-    interiors = [V8Job(p, "interior") for p in supported_images(interior_folder)]
-    exteriors = [V8Job(p, "exterior") for p in supported_images(exterior_folder)]
-    ok, heroes, message = twilight_preflight(exterior_folder)
+def build_jobs(interior_folder: Path, exterior_folder: Path, selected: set[Path] | None = None) -> tuple[list[V8Job], list[Path]]:
+    selected = {p.resolve() for p in selected} if selected is not None else None
+    interiors = [V8Job(p, "interior") for p in supported_images(interior_folder) if selected is None or p in selected]
+    exteriors = [V8Job(p, "exterior") for p in supported_images(exterior_folder) if selected is None or p in selected]
+    heroes = [p for p in red_tagged_images(exterior_folder) if selected is None or p in selected]
+    ok = len(heroes) <= 1; message = "Only one selected Exterior image may have the RED Finder tag: " + ", ".join(p.name for p in heroes) if not ok else ""
     if not ok:
         raise ValueError(message)
     if heroes:
@@ -156,13 +207,13 @@ def generate_v8_reports(cache: ComparisonCache, jobs: list[V8Job], output_folder
     return before_pdf, after_pdf
 
 
-def process_v8_batch(client, *, interior_folder: Path, exterior_folder: Path, output_folder: Path,
+def process_v8_batch(client, *, interior_folder: Path, exterior_folder: Path, output_folder: Path, selected_files: set[Path] | None = None,
                      quality: str = "medium", landscape: str = "Natural", distractions: str = "Remove",
                      event: Callable[[str, dict], None] = lambda _k, _p: None) -> V8Summary:
     """One direct Images Edit call for each normal job, plus one twilight hero call."""
     if quality not in QUALITY_OPTIONS:
         raise ValueError("V8 quality must be medium or high")
-    jobs, _heroes = build_jobs(interior_folder, exterior_folder)
+    jobs, _heroes = build_jobs(interior_folder, exterior_folder, selected_files)
     output_folder = Path(output_folder).resolve(); output_folder.mkdir(parents=True, exist_ok=True)
     cache = ComparisonCache(); summary = V8Summary(cache_root=cache.root)
     for job in jobs:
@@ -174,7 +225,7 @@ def process_v8_batch(client, *, interior_folder: Path, exterior_folder: Path, ou
                 destination = output_folder / job.output_name
                 if destination.exists():
                     raise FileExistsError(f"Refusing to overwrite existing output: {destination.name}")
-                generated, _size, _usage = core.call_image_editor(client, job.source, prompt_for(job, landscape, distractions), quality)
+                generated, _size, _usage = call_v8_image_editor(client, job.source, prompt_for(job, landscape, distractions), quality)
                 summary.api_calls += 1
                 with core.Image.open(core.BytesIO(generated)) as image:
                     final = core.apply_premium_finish(image.convert("RGB"))
@@ -207,6 +258,7 @@ class V8Window(QMainWindow):
         self.interior = Path(self.settings.value("folders/interior", str(core.USER_DATA_DIR / "Interior")))
         self.exterior = Path(self.settings.value("folders/exterior", str(core.USER_DATA_DIR / "Exterior")))
         self.output = Path(self.settings.value("folders/output", str(core.USER_DATA_DIR / "Output")))
+        self.discovered: list[tuple[str, Path]] = []; self.selected_files: set[Path] = set(); self.updating_selection = False
         self._build(); self.refresh_twilight()
 
     def _build(self):
@@ -226,6 +278,11 @@ class V8Window(QMainWindow):
             count = QLabel(""); self.folder_counts[attr] = count
             form.addWidget(QLabel(label), row * 2, 0); form.addWidget(value, row * 2, 1); form.addWidget(choose, row * 2, 2); form.addWidget(open_button, row * 2, 3); form.addWidget(count, row * 2 + 1, 1, 1, 3); self.paths.append(value)
         layout.addWidget(setup)
+        image_card = QGroupBox("IMAGES"); image_layout = QVBoxLayout(image_card); image_actions = QHBoxLayout()
+        self.rescan_button = QPushButton("Rescan"); self.select_all_button = QPushButton("Select All"); self.clear_all_button = QPushButton("Clear All")
+        self.rescan_button.clicked.connect(self.rescan); self.select_all_button.clicked.connect(self.select_all); self.clear_all_button.clicked.connect(self.clear_all)
+        image_actions.addWidget(self.rescan_button); image_actions.addWidget(self.select_all_button); image_actions.addWidget(self.clear_all_button); image_actions.addStretch(1); image_layout.addLayout(image_actions)
+        self.images = QTableWidget(0, 3); self.images.setHorizontalHeaderLabels(["TYPE", "FILE", "SELECTED / STATUS"]); self.images.horizontalHeader().setStretchLastSection(True); self.images.setMaximumHeight(145); self.images.itemChanged.connect(self.selection_changed); image_layout.addWidget(self.images); layout.addWidget(image_card)
         options = QGroupBox("EXTERIOR OPTIONS"); opt = QGridLayout(options); opt.setColumnStretch(1, 1)
         self.natural = QRadioButton("Natural"); self.enhanced = QRadioButton("Enhanced"); self.natural.setChecked(True)
         self.remove = QRadioButton("Remove"); self.keep = QRadioButton("Keep"); self.remove.setChecked(True)
@@ -242,11 +299,11 @@ class V8Window(QMainWindow):
         for control in (self.natural, self.enhanced, self.remove, self.keep, self.quality):
             signal = control.toggled if hasattr(control, "toggled") else control.currentTextChanged
             signal.connect(self.refresh_preflight)
-        self.refresh_paths(); self.refresh_preflight()
+        self.refresh_paths(); self.rescan()
 
     def browse(self, attr: str):
         value = QFileDialog.getExistingDirectory(self, "Choose folder", str(getattr(self, attr)))
-        if value: setattr(self, attr, Path(value)); self.settings.setValue(f"folders/{attr}", value); self.refresh_paths(); self.refresh_preflight()
+        if value: setattr(self, attr, Path(value)); self.settings.setValue(f"folders/{attr}", value); self.refresh_paths(); self.rescan()
 
     def open_folder(self, attr: str):
         path = Path(getattr(self, attr))
@@ -258,14 +315,33 @@ class V8Window(QMainWindow):
             label.setText(str(path) if selected else "Not selected"); label.setToolTip(str(path))
             self.folder_counts[attr].setText(f"{len(supported_images(path))} images" if path.is_dir() and attr != "output" else "")
 
+    def rescan(self, preserve_empty: bool = False):
+        previous = set(self.selected_files); self.discovered = [("INTERIOR", p) for p in supported_images(self.interior)] + [("EXTERIOR", p) for p in supported_images(self.exterior)]
+        available = {p for _, p in self.discovered}; self.selected_files = (previous & available) if previous or preserve_empty else set(available)
+        self.updating_selection = True; self.images.setRowCount(0)
+        for kind, path in self.discovered:
+            row = self.images.rowCount(); self.images.insertRow(row); self.images.setItem(row, 0, QTableWidgetItem(kind)); self.images.setItem(row, 1, QTableWidgetItem(path.name))
+            checked = QTableWidgetItem("Selected" if path in self.selected_files else "Not selected"); checked.setData(Qt.UserRole, str(path)); checked.setFlags(checked.flags() | Qt.ItemIsUserCheckable); checked.setCheckState(Qt.Checked if path in self.selected_files else Qt.Unchecked); self.images.setItem(row, 2, checked)
+        self.updating_selection = False; self.refresh_paths(); self.refresh_preflight()
+
+    def select_all(self): self.selected_files = {p for _, p in self.discovered}; self.rescan()
+    def clear_all(self): self.selected_files.clear(); self.rescan(preserve_empty=True)
+    def selection_changed(self, item):
+        if self.updating_selection or item.column() != 2: return
+        path = Path(item.data(Qt.UserRole));
+        if item.checkState() == Qt.Checked: self.selected_files.add(path)
+        else: self.selected_files.discard(path)
+        self.refresh_preflight()
+
     def refresh_twilight(self):
         ok, heroes, message = twilight_preflight(self.exterior) if self.exterior.is_dir() else (True, [], "")
         self.hero.setText("🔴 " + heroes[0].name if len(heroes) == 1 else "🔴 No red-tagged exterior detected" if not heroes else "⚠ Multiple red-tagged exterior images detected")
         if message: self.status.setText(message); self.hero_note.setText(message)
 
     def refresh_preflight(self, *_):
-        self.refresh_twilight(); interior = len(supported_images(self.interior)) if self.interior.is_dir() else 0; exterior = len(supported_images(self.exterior)) if self.exterior.is_dir() else 0
-        ok, heroes, message = twilight_preflight(self.exterior) if self.exterior.is_dir() else (True, [], "")
+        self.refresh_twilight(); interior = sum(1 for kind, p in self.discovered if kind == "INTERIOR" and p in self.selected_files); exterior = sum(1 for kind, p in self.discovered if kind == "EXTERIOR" and p in self.selected_files)
+        heroes = [p for p in red_tagged_images(self.exterior) if p in self.selected_files] if self.exterior.is_dir() else []
+        ok = len(heroes) <= 1; message = "Resolve multiple Twilight tags before processing" if not ok else ""
         generations = interior + exterior + len(heroes); cost = generations * core.estimated_cost_per_image(self.quality.currentText().lower())
         self.preflight.setText(f"Interior {interior}    Exterior {exterior}    Twilight {len(heroes)}\nAPI Generations {generations}    Estimated Cost ${cost:.2f}")
         ready = bool(interior or exterior) and self.output.is_dir() and ok
@@ -280,7 +356,7 @@ class V8Window(QMainWindow):
     def start_processing(self):
         """Use V7's canonical API-key loader; preflight blocks multiple heroes before any call."""
         try:
-            jobs, _heroes = build_jobs(self.interior, self.exterior)
+            jobs, _heroes = build_jobs(self.interior, self.exterior, self.selected_files)
             api_key, message = core.load_project_api_key()
             if not api_key:
                 self.status.setText(message); return
@@ -294,7 +370,7 @@ class V8Window(QMainWindow):
                     self.add_activity("", payload['filename'], payload['status']); self.progress.setValue(self.progress.value() + 1)
                 QApplication.processEvents()
             summary = process_v8_batch(core.OpenAI(api_key=api_key), interior_folder=self.interior,
-                exterior_folder=self.exterior, output_folder=self.output,
+                exterior_folder=self.exterior, output_folder=self.output, selected_files=self.selected_files,
                 quality=self.quality.currentText().lower(), landscape="Enhanced" if self.enhanced.isChecked() else "Natural",
                 distractions="Keep" if self.keep.isChecked() else "Remove", event=event)
             self.status.setText(f"Completed: {summary.completed} | Review: {summary.review} | Error: {summary.errors}")

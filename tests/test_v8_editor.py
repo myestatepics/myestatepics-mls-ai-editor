@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -56,3 +57,21 @@ def test_snapshot_survives_visible_output_deletion(monkeypatch, tmp_path):
     before, after = v8.generate_v8_reports(cache, [job], tmp_path)
     assert before.exists() and after.exists() and cache.after[job].exists()
     cache.cleanup()
+
+
+@pytest.mark.parametrize("suffix", [".HEIC", ".heic", ".HEIF", ".heif"])
+def test_heic_and_heif_discovery_and_normalized_upload(monkeypatch, tmp_path, suffix):
+    v8 = load_v8(monkeypatch)
+    source = tmp_path / f"iphone{suffix}"
+    Image.new("RGB", (96, 64), (70, 120, 160)).save(source, format="HEIF")
+    original = source.read_bytes()
+    assert source in v8.supported_images(tmp_path)
+    upload = v8.prepare_v8_api_upload(source)
+    try:
+        with Image.open(upload) as normalized:
+            assert normalized.format == "JPEG"
+            assert normalized.mode == "RGB"
+            assert normalized.size == (96, 64)
+        assert source.read_bytes() == original
+    finally:
+        upload.unlink(missing_ok=True)
