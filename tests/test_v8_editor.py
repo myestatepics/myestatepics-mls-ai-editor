@@ -33,6 +33,17 @@ def test_interior_prompt_is_frozen(monkeypatch):
     assert v8.MODEL == "gpt-image-2.5-sunburst"
 
 
+def test_v8_reads_a_valid_v7_key_without_copying_it(monkeypatch, tmp_path):
+    v8 = load_v8(monkeypatch)
+    legacy = tmp_path / "Library" / "Application Support" / "MyEstatePics AI Editor - V7.0"
+    legacy.mkdir(parents=True); (legacy / ".env").write_text("OPENAI_API_KEY=sk-v7-compatible-key\n", encoding="utf-8")
+    monkeypatch.setattr(v8.core, "load_project_api_key", lambda: (None, "OPENAI_API_KEY is missing"))
+    monkeypatch.setattr(v8.Path, "home", classmethod(lambda cls: tmp_path))
+    key, message = v8.load_v8_api_key()
+    assert key == "sk-v7-compatible-key" and message == "OpenAI API key loaded"
+    assert not (tmp_path / "Library" / "Application Support" / "MyEstatePics AI Editor - V8.0" / ".env").exists()
+
+
 def test_exterior_options_and_twilight_job(monkeypatch, tmp_path):
     v8 = load_v8(monkeypatch); interior = tmp_path / "i"; exterior = tmp_path / "e"; interior.mkdir(); exterior.mkdir(); jpeg(interior / "inside.jpg"); jpeg(exterior / "outside.jpg")
     monkeypatch.setattr(v8, "finder_tags", lambda path: ("Red",) if path.name == "outside.jpg" else ())
@@ -57,6 +68,17 @@ def test_snapshot_survives_visible_output_deletion(monkeypatch, tmp_path):
     before, after = v8.generate_v8_reports(cache, [job], tmp_path)
     assert before.exists() and after.exists() and cache.after[job].exists()
     cache.cleanup()
+
+
+def test_cancel_stops_before_the_next_image_and_never_calls_api(monkeypatch, tmp_path):
+    v8 = load_v8(monkeypatch); interior = tmp_path / "interior"; output = tmp_path / "output"; interior.mkdir(); output.mkdir()
+    jpeg(interior / "one.jpg"); jpeg(interior / "two.jpg")
+    calls = []
+    monkeypatch.setattr(v8, "call_v8_image_editor", lambda *_args, **_kwargs: (calls.append(True), None)[1])
+    events = []
+    summary = v8.process_v8_batch(object(), interior_folder=interior, exterior_folder=tmp_path / "none", output_folder=output,
+        cancel_requested=lambda: True, event=lambda kind, payload: events.append(kind))
+    assert calls == [] and summary.api_calls == 0 and events == ["cancelled"]
 
 
 @pytest.mark.parametrize("suffix", [".HEIC", ".heic", ".HEIF", ".heif"])
