@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 from PIL import Image
+from PySide6.QtWidgets import QApplication
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -24,6 +25,14 @@ def load_v8(monkeypatch):
 
 def jpeg(path: Path, color=(100, 120, 140)):
     Image.new("RGB", (120, 80), color).save(path, quality=90)
+
+
+def v8_window(monkeypatch, tmp_path):
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    v8 = load_v8(monkeypatch); monkeypatch.setattr(v8.core, "USER_DATA_DIR", tmp_path / "support")
+    app = QApplication.instance() or QApplication([])
+    window = v8.V8Window()
+    return v8, app, window
 
 
 def test_interior_prompt_is_frozen(monkeypatch):
@@ -44,21 +53,39 @@ def test_v8_reads_a_valid_v7_key_without_copying_it(monkeypatch, tmp_path):
     assert not (tmp_path / "Library" / "Application Support" / "MyEstatePics AI Editor - V8.0" / ".env").exists()
 
 
-def test_exterior_options_and_twilight_job(monkeypatch, tmp_path):
+def test_exterior_options_and_explicit_hero_job(monkeypatch, tmp_path):
     v8 = load_v8(monkeypatch); interior = tmp_path / "i"; exterior = tmp_path / "e"; interior.mkdir(); exterior.mkdir(); jpeg(interior / "inside.jpg"); jpeg(exterior / "outside.jpg")
-    monkeypatch.setattr(v8, "finder_tags", lambda path: ("Red",) if path.name == "outside.jpg" else ())
-    jobs, heroes = v8.build_jobs(interior, exterior)
+    hero = exterior / "outside.jpg"
+    jobs, heroes = v8.build_jobs(interior, exterior, hero=hero)
     assert [j.kind for j in jobs] == ["interior", "exterior", "twilight"]
     assert jobs[-1].output_name == "outside-TWILIGHT.jpg" and len(heroes) == 1
     assert "Preserve actual grass" in v8.exterior_instruction("Natural", "Keep")
     assert "Conservatively polish" in v8.exterior_instruction("Enhanced", "Remove")
 
 
-def test_multiple_red_tags_block_before_requests(monkeypatch, tmp_path):
+def test_no_hero_and_finder_metadata_have_zero_twilight_effect(monkeypatch, tmp_path):
     v8 = load_v8(monkeypatch); exterior = tmp_path / "e"; exterior.mkdir(); jpeg(exterior / "a.jpg"); jpeg(exterior / "b.jpg")
-    monkeypatch.setattr(v8, "finder_tags", lambda _path: ("Red",))
-    ok, heroes, message = v8.twilight_preflight(exterior)
-    assert not ok and len(heroes) == 2 and "a.jpg" in message and "b.jpg" in message
+    jobs, heroes = v8.build_jobs(None, exterior)
+    assert [job.kind for job in jobs] == ["exterior", "exterior"] and heroes == []
+    assert not hasattr(v8, "finder_tags") and not hasattr(v8, "red_tagged_images")
+
+
+def test_hero_must_be_a_selected_eligible_exterior_file(monkeypatch, tmp_path):
+    v8 = load_v8(monkeypatch); interior = tmp_path / "i"; exterior = tmp_path / "e"; outside = tmp_path / "outside"; interior.mkdir(); exterior.mkdir(); outside.mkdir()
+    jpeg(interior / "inside.jpg"); jpeg(exterior / "hero.jpg"); jpeg(outside / "other.jpg"); (exterior / "not-image.txt").write_text("x")
+    assert v8.validate_hero_image(interior / "inside.jpg", exterior)[0] is False
+    assert v8.validate_hero_image(outside / "other.jpg", exterior)[0] is False
+    assert v8.validate_hero_image(exterior / "not-image.txt", exterior)[0] is False
+    with pytest.raises(ValueError, match="must also be selected"):
+        v8.build_jobs(None, exterior, selected=set(), hero=exterior / "hero.jpg")
+
+
+def test_explicit_heic_hero_creates_one_additional_twilight_job(monkeypatch, tmp_path):
+    v8 = load_v8(monkeypatch); exterior = tmp_path / "e"; exterior.mkdir(); hero = exterior / "IMG_1060.HEIC"
+    Image.new("RGB", (96, 64), (70, 120, 160)).save(hero, format="HEIF")
+    jobs, heroes = v8.build_jobs(None, exterior, hero=hero)
+    assert [job.kind for job in jobs] == ["exterior", "twilight"]
+    assert heroes == [hero.resolve()] and jobs[-1].output_name == "IMG_1060-TWILIGHT.JPG"
 
 
 @pytest.mark.parametrize("include_interior,include_exterior,expected", [
@@ -111,6 +138,30 @@ def test_output_selection_is_session_only_and_rescan_does_not_change_it(monkeypa
     assert len(v8.supported_images(interior)) == 1
     selected_output = None
     assert v8.validate_output_folder(selected_output)[0] is False
+
+
+def test_choose_hero_autoselects_and_deselecting_or_clearing_removes_it(monkeypatch, tmp_path):
+    v8, app, window = v8_window(monkeypatch, tmp_path); exterior = tmp_path / "exterior"; exterior.mkdir(); hero = exterior / "hero.jpg"; jpeg(hero)
+    window.exterior = exterior; window.rescan(); window.clear_all()
+    monkeypatch.setattr(v8.QFileDialog, "getOpenFileName", lambda *_args: (str(hero), "Images (*.jpg)"))
+    window.choose_hero(); app.processEvents()
+    assert window.hero_image == hero.resolve() and hero.resolve() in window.selected_files and window.hero.text() == "hero.jpg"
+    window.selected_files.discard(hero.resolve()); window.rescan(preserve_empty=True); window.selection_changed(window.images.item(0, 2))
+    # Explicitly exercising the checkbox callback's deselection path clears the hero.
+    window.images.item(0, 2).setCheckState(v8.Qt.Unchecked); app.processEvents()
+    assert window.hero_image is None
+    window.hero_image = hero.resolve(); window.clear_hero()
+    assert window.hero_image is None and window.hero.text() == "Not selected"
+    window.close()
+
+
+def test_exterior_change_or_missing_hero_clears_hero_but_interior_change_does_not(monkeypatch, tmp_path):
+    _v8, _app, window = v8_window(monkeypatch, tmp_path); exterior = tmp_path / "exterior"; replacement = tmp_path / "replacement"; interior = tmp_path / "interior"; exterior.mkdir(); replacement.mkdir(); interior.mkdir(); hero = exterior / "hero.jpg"; jpeg(hero)
+    window.exterior = exterior; window.hero_image = hero.resolve(); window.rescan(); window.interior = interior; window.rescan()
+    assert window.hero_image == hero.resolve()
+    window.exterior = replacement; window.rescan()
+    assert window.hero_image is None
+    window.close()
 
 
 def test_snapshot_survives_visible_output_deletion(monkeypatch, tmp_path):

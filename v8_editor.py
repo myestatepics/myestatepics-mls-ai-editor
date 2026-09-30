@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import os
-import plistlib
 import shutil
 import subprocess
 import tempfile
@@ -72,30 +71,19 @@ def supported_images(folder: Path | None) -> list[Path]:
                   key=lambda p: p.name.casefold())
 
 
-def finder_tags(path: Path) -> tuple[str, ...]:
-    """Read Finder tags locally; unavailable metadata simply means no tag."""
+def validate_hero_image(hero: Path | None, exterior_folder: Path | None) -> tuple[bool, str]:
+    """A twilight hero is exactly one eligible file in the current Exterior folder."""
+    if hero is None:
+        return True, ""
+    if exterior_folder is None:
+        return False, "Choose a Twilight Hero from the current Exterior folder."
     try:
-        # The frozen macOS Python runtime does not expose os.getxattr, while
-        # /usr/bin/xattr is present on supported macOS installations.
-        result = subprocess.run(["xattr", "-px", "com.apple.metadata:_kMDItemUserTags", str(path)],
-                                capture_output=True, text=True, check=True)
-        raw = bytes.fromhex("".join(result.stdout.split()))
-        values = plistlib.loads(raw)
-        return tuple(str(value).split("\n", 1)[0] for value in values)
-    except (OSError, ValueError, subprocess.CalledProcessError, plistlib.InvalidFileException):
-        return ()
-
-
-def red_tagged_images(exterior_folder: Path | None) -> list[Path]:
-    return [p for p in supported_images(exterior_folder)
-            if any(tag.casefold() == "red" for tag in finder_tags(p))]
-
-
-def twilight_preflight(exterior_folder: Path | None) -> tuple[bool, list[Path], str]:
-    heroes = red_tagged_images(exterior_folder)
-    if len(heroes) > 1:
-        return False, heroes, "Only one Exterior image may have the RED Finder tag: " + ", ".join(p.name for p in heroes)
-    return True, heroes, ""
+        candidate = Path(hero).resolve()
+    except OSError:
+        return False, "Choose a Twilight Hero from the current Exterior folder."
+    if candidate not in set(supported_images(exterior_folder)):
+        return False, "Twilight Hero must be an eligible image in the current Exterior folder."
+    return True, ""
 
 
 def validate_output_folder(output_folder: Path | None) -> tuple[bool, str]:
@@ -201,16 +189,20 @@ class ComparisonCache:
         shutil.rmtree(self.root, ignore_errors=True)
 
 
-def build_jobs(interior_folder: Path | None, exterior_folder: Path | None, selected: set[Path] | None = None) -> tuple[list[V8Job], list[Path]]:
+def build_jobs(interior_folder: Path | None, exterior_folder: Path | None, selected: set[Path] | None = None,
+               hero: Path | None = None) -> tuple[list[V8Job], list[Path]]:
     selected = {p.resolve() for p in selected} if selected is not None else None
     interiors = [V8Job(p, "interior") for p in supported_images(interior_folder) if selected is None or p in selected]
     exteriors = [V8Job(p, "exterior") for p in supported_images(exterior_folder) if selected is None or p in selected]
-    heroes = [p for p in red_tagged_images(exterior_folder) if selected is None or p in selected]
-    ok = len(heroes) <= 1; message = "Only one selected Exterior image may have the RED Finder tag: " + ", ".join(p.name for p in heroes) if not ok else ""
-    if not ok:
-        raise ValueError(message)
-    if heroes:
-        exteriors.append(V8Job(heroes[0], "twilight"))
+    valid_hero, hero_message = validate_hero_image(hero, exterior_folder)
+    if not valid_hero:
+        raise ValueError(hero_message)
+    hero_path = Path(hero).resolve() if hero is not None else None
+    if hero_path is not None and selected is not None and hero_path not in selected:
+        raise ValueError("Selected Twilight Hero must also be selected for processing.")
+    heroes = [hero_path] if hero_path is not None else []
+    if hero_path is not None:
+        exteriors.append(V8Job(hero_path, "twilight"))
     names: set[str] = set()
     for job in interiors + exteriors:
         key = job.output_name.casefold()
@@ -236,11 +228,12 @@ def generate_v8_reports(cache: ComparisonCache, jobs: list[V8Job], output_folder
 def process_v8_batch(client, *, interior_folder: Path | None, exterior_folder: Path | None, output_folder: Path | None, selected_files: set[Path] | None = None,
                      quality: str = "medium", landscape: str = "Natural", distractions: str = "Remove",
                      event: Callable[[str, dict], None] = lambda _k, _p: None,
-                     cancel_requested: Callable[[], bool] = lambda: False) -> V8Summary:
+                     cancel_requested: Callable[[], bool] = lambda: False,
+                     hero: Path | None = None) -> V8Summary:
     """One direct Images Edit call for each normal job, plus one twilight hero call."""
     if quality not in QUALITY_OPTIONS:
         raise ValueError("V8 quality must be medium or high")
-    jobs, _heroes = build_jobs(interior_folder, exterior_folder, selected_files)
+    jobs, _heroes = build_jobs(interior_folder, exterior_folder, selected_files, hero)
     if not jobs:
         raise ValueError("Select at least one image before processing.")
     valid_output, output_message = validate_output_folder(output_folder)
@@ -298,7 +291,7 @@ class V8Window(QMainWindow):
         self.exterior = self._restored_input("exterior")
         # Output is deliberately session-only.  Never restore a previous job's destination.
         self.output: Path | None = None
-        self.discovered: list[tuple[str, Path]] = []; self.selected_files: set[Path] = set(); self.updating_selection = False; self.cancel_requested = False
+        self.discovered: list[tuple[str, Path]] = []; self.selected_files: set[Path] = set(); self.updating_selection = False; self.cancel_requested = False; self.hero_image: Path | None = None
         self._build(); self.refresh_twilight()
 
     def _restored_input(self, name: str) -> Path | None:
@@ -340,8 +333,10 @@ class V8Window(QMainWindow):
         distractions = QHBoxLayout(); distractions.addWidget(self.remove); distractions.addWidget(self.keep); distractions.addStretch(1)
         opt.addWidget(QLabel("Landscape"), 0, 0); opt.addLayout(landscape, 0, 1); opt.addWidget(QLabel("Preserve existing lawn and landscaping"), 1, 1)
         opt.addWidget(QLabel("Distractions"), 2, 0); opt.addLayout(distractions, 2, 1); opt.addWidget(QLabel("Remove temporary distractions"), 3, 1)
-        self.hero = QLabel(); self.hero_note = QLabel("Red Finder tag creates one additional early-twilight image."); self.quality = QComboBox(); self.quality.addItems(["MEDIUM", "HIGH"]); self.quality.setFixedWidth(130)
-        opt.addWidget(QLabel("Twilight Hero"), 4, 0); opt.addWidget(self.hero, 4, 1); opt.addWidget(self.hero_note, 5, 1); opt.addWidget(QLabel("Quality"), 6, 0); opt.addWidget(self.quality, 6, 1)
+        self.hero = QLabel("Not selected"); self.choose_hero_button = QPushButton("Choose Hero Image"); self.clear_hero_button = QPushButton("Clear"); self.choose_hero_button.clicked.connect(self.choose_hero); self.clear_hero_button.clicked.connect(self.clear_hero)
+        hero_actions = QHBoxLayout(); hero_actions.addWidget(self.hero, 1); hero_actions.addWidget(self.choose_hero_button); hero_actions.addWidget(self.clear_hero_button)
+        self.hero_note = QLabel("Optional: generates one additional early-twilight image."); self.quality = QComboBox(); self.quality.addItems(["MEDIUM", "HIGH"]); self.quality.setFixedWidth(130)
+        opt.addWidget(QLabel("Twilight Hero"), 4, 0); opt.addLayout(hero_actions, 4, 1); opt.addWidget(self.hero_note, 5, 1); opt.addWidget(QLabel("Quality"), 6, 0); opt.addWidget(self.quality, 6, 1)
         workspace.addWidget(image_card, 11); workspace.addWidget(options, 9); layout.addLayout(workspace, 1)
         preflight = QGroupBox("PRE-FLIGHT"); pre = QGridLayout(preflight); self.preflight = QLabel(); self.ready = QLabel(); self.start = QPushButton("START PROCESSING"); self.start.setFixedWidth(210); self.start.clicked.connect(self.start_processing)
         pre.addWidget(self.preflight, 0, 0); pre.addWidget(self.ready, 1, 0); pre.addWidget(self.start, 0, 1, 2, 1); layout.addWidget(preflight)
@@ -357,6 +352,8 @@ class V8Window(QMainWindow):
         value = QFileDialog.getExistingDirectory(self, "Choose folder", str(current or Path.home()))
         if value:
             setattr(self, attr, Path(value))
+            if attr == "exterior":
+                self.hero_image = None
             if attr != "output":
                 self.settings.setValue(f"folders/{attr}", value)
             self.refresh_paths(); self.rescan()
@@ -364,6 +361,27 @@ class V8Window(QMainWindow):
     def clear_output(self):
         self.output = None
         self.refresh_paths(); self.refresh_preflight()
+
+    def choose_hero(self):
+        if self.exterior is None:
+            QMessageBox.warning(self, "TWILIGHT HERO", "Choose an Exterior folder before selecting a Twilight Hero.")
+            return
+        filters = "Images (*.jpg *.jpeg *.png *.heic *.heif);;All Files (*)"
+        value, _selected_filter = QFileDialog.getOpenFileName(self, "Choose Hero Image", str(self.exterior), filters)
+        if not value:
+            return
+        candidate = Path(value).resolve()
+        valid, message = validate_hero_image(candidate, self.exterior)
+        if not valid:
+            QMessageBox.warning(self, "TWILIGHT HERO", message)
+            return
+        self.hero_image = candidate
+        self.selected_files.add(candidate)
+        self.rescan()
+
+    def clear_hero(self):
+        self.hero_image = None
+        self.refresh_twilight(); self.refresh_preflight()
 
     def open_folder(self, attr: str):
         path = getattr(self, attr)
@@ -378,7 +396,12 @@ class V8Window(QMainWindow):
 
     def rescan(self, preserve_empty: bool = False):
         previous = set(self.selected_files); self.discovered = [("INTERIOR", p) for p in supported_images(self.interior)] + [("EXTERIOR", p) for p in supported_images(self.exterior)]
-        available = {p for _, p in self.discovered}; self.selected_files = (previous & available) if previous or preserve_empty else set(available)
+        available = {p for _, p in self.discovered}; exterior_images = {p for kind, p in self.discovered if kind == "EXTERIOR"}
+        if self.hero_image not in exterior_images:
+            self.hero_image = None
+        self.selected_files = (previous & available) if previous or preserve_empty else set(available)
+        if self.hero_image is not None:
+            self.selected_files.add(self.hero_image)
         self.updating_selection = True; self.images.setRowCount(0)
         for kind, path in self.discovered:
             row = self.images.rowCount(); self.images.insertRow(row); self.images.setItem(row, 0, QTableWidgetItem(kind)); self.images.setItem(row, 1, QTableWidgetItem(path.name))
@@ -391,39 +414,42 @@ class V8Window(QMainWindow):
         if self.updating_selection or item.column() != 2: return
         path = Path(item.data(Qt.UserRole));
         if item.checkState() == Qt.Checked: self.selected_files.add(path)
-        else: self.selected_files.discard(path)
+        else:
+            self.selected_files.discard(path)
+            if path == self.hero_image:
+                self.hero_image = None
         self.refresh_preflight()
 
     def refresh_twilight(self):
-        heroes = [p for p in red_tagged_images(self.exterior) if p in self.selected_files] if self.exterior else []
-        message = "Only one selected Exterior image may have the RED Finder tag: " + ", ".join(p.name for p in heroes) if len(heroes) > 1 else ""
-        self.hero.setText("🔴 " + heroes[0].name if len(heroes) == 1 else "🔴 No red-tagged exterior detected" if not heroes else "⚠ Multiple red-tagged exterior images detected")
-        if message: self.status.setText(message); self.hero_note.setText(message)
+        valid, _message = validate_hero_image(self.hero_image, self.exterior)
+        if not valid:
+            self.hero_image = None
+        self.hero.setText(self.hero_image.name if self.hero_image else "Not selected")
 
     def refresh_preflight(self, *_):
         self.refresh_twilight(); interior = sum(1 for kind, p in self.discovered if kind == "INTERIOR" and p in self.selected_files); exterior = sum(1 for kind, p in self.discovered if kind == "EXTERIOR" and p in self.selected_files)
-        heroes = [p for p in red_tagged_images(self.exterior) if p in self.selected_files] if self.exterior else []
-        ok = len(heroes) <= 1; message = "Resolve multiple Twilight tags before processing" if not ok else ""
-        generations = interior + exterior + len(heroes); cost = generations * core.estimated_cost_per_image(self.quality.currentText().lower())
+        valid_hero, hero_message = validate_hero_image(self.hero_image, self.exterior)
+        hero_count = 1 if valid_hero and self.hero_image is not None and self.hero_image in self.selected_files else 0
+        generations = interior + exterior + hero_count; cost = generations * core.estimated_cost_per_image(self.quality.currentText().lower())
         self.images_title.setText(f"IMAGES — {len(self.selected_files)} selected")
         output_ok, output_message = validate_output_folder(self.output)
         api_key, api_message = load_v8_api_key()
         output_display = str(self.output) if self.output else "NOT SELECTED"
-        self.preflight.setText(f"Interior {interior}    Exterior {exterior}    Twilight {len(heroes)}\nAPI Generations {generations}    Estimated Cost ${cost:.2f}\nOutput: {output_display}")
-        ready = bool(interior or exterior) and output_ok and bool(api_key) and ok
+        self.preflight.setText(f"Interior {interior}    Exterior {exterior}    Twilight {hero_count}\nAPI Generations {generations}    Estimated Cost ${cost:.2f}\nOutput: {output_display}")
+        ready = bool(interior or exterior) and output_ok and bool(api_key) and valid_hero
         self.start.setEnabled(ready)
-        self.ready.setText(f"Ready to process {generations} generations" if ready else message or output_message if not output_ok else api_message if not api_key else "Select at least one image")
+        self.ready.setText(f"Ready to process {generations} generations" if ready else hero_message if not valid_hero else output_message if not output_ok else api_message if not api_key else "Select at least one image")
 
     def validate_start(self):
         try:
-            jobs, heroes = build_jobs(self.interior, self.exterior)
+            jobs, heroes = build_jobs(self.interior, self.exterior, hero=self.hero_image)
             self.status.setText(f"Ready — {len(jobs)} generations ({len(heroes)} Twilight hero)")
         except Exception as exc: self.status.setText(str(exc))
 
     def start_processing(self):
         """Use V7's canonical API-key loader; preflight blocks multiple heroes before any call."""
         try:
-            jobs, _heroes = build_jobs(self.interior, self.exterior, self.selected_files)
+            jobs, _heroes = build_jobs(self.interior, self.exterior, self.selected_files, self.hero_image)
             if not jobs:
                 self.status.setText("Select at least one image before processing."); return
             valid_output, output_message = validate_output_folder(self.output)
@@ -445,7 +471,7 @@ class V8Window(QMainWindow):
                 exterior_folder=self.exterior, output_folder=self.output, selected_files=self.selected_files,
                 quality=self.quality.currentText().lower(), landscape="Enhanced" if self.enhanced.isChecked() else "Natural",
                 distractions="Keep" if self.keep.isChecked() else "Remove", event=event,
-                cancel_requested=lambda: self.cancel_requested)
+                cancel_requested=lambda: self.cancel_requested, hero=self.hero_image)
             self.status.setText(f"Completed: {summary.completed} | Review: {summary.review} | Error: {summary.errors}")
             self.counts.setText(f"Completed {summary.completed}    Review {summary.review}    Errors {summary.errors}")
             self.review_button.setEnabled(bool(summary.before_pdf and summary.after_pdf))
