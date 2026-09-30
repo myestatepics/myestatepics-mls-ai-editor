@@ -61,6 +61,58 @@ def test_multiple_red_tags_block_before_requests(monkeypatch, tmp_path):
     assert not ok and len(heroes) == 2 and "a.jpg" in message and "b.jpg" in message
 
 
+@pytest.mark.parametrize("include_interior,include_exterior,expected", [
+    (True, False, 1), (False, True, 1), (True, True, 2), (False, False, 0),
+])
+def test_optional_inputs_build_exactly_the_selected_workflow(monkeypatch, tmp_path, include_interior, include_exterior, expected):
+    v8 = load_v8(monkeypatch); interior = tmp_path / "interior"; exterior = tmp_path / "exterior"; interior.mkdir(); exterior.mkdir()
+    if include_interior: jpeg(interior / "inside.jpg")
+    if include_exterior: jpeg(exterior / "outside.jpg")
+    jobs, _heroes = v8.build_jobs(interior if include_interior else None, exterior if include_exterior else None)
+    assert len(jobs) == expected
+
+
+def test_output_validation_requires_a_real_writable_explicit_directory(monkeypatch, tmp_path):
+    v8 = load_v8(monkeypatch); output = tmp_path / "output"; output.mkdir(); file_path = tmp_path / "not-a-directory"; file_path.write_text("x")
+    assert v8.validate_output_folder(None)[0] is False
+    assert v8.validate_output_folder(tmp_path / "missing")[0] is False
+    assert v8.validate_output_folder(file_path)[0] is False
+    assert v8.validate_output_folder(output) == (True, "")
+    monkeypatch.setattr(v8.os, "access", lambda *_args: False)
+    assert v8.validate_output_folder(output)[0] is False
+
+
+def test_backend_rechecks_output_before_any_api_call(monkeypatch, tmp_path):
+    v8 = load_v8(monkeypatch); interior = tmp_path / "interior"; interior.mkdir(); jpeg(interior / "one.jpg")
+    calls = []
+    monkeypatch.setattr(v8, "call_v8_image_editor", lambda *_args, **_kwargs: calls.append(True))
+    with pytest.raises(ValueError, match="Select a valid Output folder before processing"):
+        v8.process_v8_batch(object(), interior_folder=interior, exterior_folder=None, output_folder=None)
+    assert calls == []
+
+
+def test_output_invalidated_after_batch_start_still_blocks_first_paid_call(monkeypatch, tmp_path):
+    v8 = load_v8(monkeypatch); interior = tmp_path / "interior"; output = tmp_path / "output"; interior.mkdir(); output.mkdir(); jpeg(interior / "one.jpg")
+    calls = []; validations = iter([(True, ""), (False, "Select a valid Output folder before processing.")])
+    monkeypatch.setattr(v8, "validate_output_folder", lambda _folder: next(validations))
+    monkeypatch.setattr(v8, "call_v8_image_editor", lambda *_args, **_kwargs: calls.append(True))
+    with pytest.raises(ValueError, match="Select a valid Output folder before processing"):
+        v8.process_v8_batch(object(), interior_folder=interior, exterior_folder=None, output_folder=output)
+    assert calls == []
+
+
+def test_output_selection_is_session_only_and_rescan_does_not_change_it(monkeypatch, tmp_path):
+    v8 = load_v8(monkeypatch); interior = tmp_path / "interior"; output = tmp_path / "output"; interior.mkdir(); output.mkdir(); jpeg(interior / "one.jpg")
+    # This models a stale preferences value: output is never supplied to the new session.
+    assert v8.validate_output_folder(None)[0] is False
+    assert len(v8.supported_images(interior)) == 1
+    selected_output = output
+    assert v8.validate_output_folder(selected_output)[0] is True
+    assert len(v8.supported_images(interior)) == 1
+    selected_output = None
+    assert v8.validate_output_folder(selected_output)[0] is False
+
+
 def test_snapshot_survives_visible_output_deletion(monkeypatch, tmp_path):
     v8 = load_v8(monkeypatch); source = tmp_path / "source.jpg"; jpeg(source); cache = v8.ComparisonCache(); job = v8.V8Job(source, "interior")
     cache.snapshot_before(job); cache.snapshot_after(job, source.read_bytes())

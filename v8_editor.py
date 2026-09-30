@@ -61,7 +61,9 @@ class V8Summary:
     errors_by_name: dict[str, str] = field(default_factory=dict)
 
 
-def supported_images(folder: Path) -> list[Path]:
+def supported_images(folder: Path | None) -> list[Path]:
+    if folder is None:
+        return []
     folder = Path(folder)
     if not folder.is_dir():
         return []
@@ -84,16 +86,26 @@ def finder_tags(path: Path) -> tuple[str, ...]:
         return ()
 
 
-def red_tagged_images(exterior_folder: Path) -> list[Path]:
+def red_tagged_images(exterior_folder: Path | None) -> list[Path]:
     return [p for p in supported_images(exterior_folder)
             if any(tag.casefold() == "red" for tag in finder_tags(p))]
 
 
-def twilight_preflight(exterior_folder: Path) -> tuple[bool, list[Path], str]:
+def twilight_preflight(exterior_folder: Path | None) -> tuple[bool, list[Path], str]:
     heroes = red_tagged_images(exterior_folder)
     if len(heroes) > 1:
         return False, heroes, "Only one Exterior image may have the RED Finder tag: " + ", ".join(p.name for p in heroes)
     return True, heroes, ""
+
+
+def validate_output_folder(output_folder: Path | None) -> tuple[bool, str]:
+    """Validate the explicit current-job destination without creating a fallback."""
+    if output_folder is None:
+        return False, "Select a valid Output folder before processing."
+    folder = Path(output_folder)
+    if not folder.exists() or not folder.is_dir() or not os.access(folder, os.W_OK | os.X_OK):
+        return False, "Select a valid Output folder before processing."
+    return True, ""
 
 
 def load_v8_api_key() -> tuple[str | None, str]:
@@ -189,7 +201,7 @@ class ComparisonCache:
         shutil.rmtree(self.root, ignore_errors=True)
 
 
-def build_jobs(interior_folder: Path, exterior_folder: Path, selected: set[Path] | None = None) -> tuple[list[V8Job], list[Path]]:
+def build_jobs(interior_folder: Path | None, exterior_folder: Path | None, selected: set[Path] | None = None) -> tuple[list[V8Job], list[Path]]:
     selected = {p.resolve() for p in selected} if selected is not None else None
     interiors = [V8Job(p, "interior") for p in supported_images(interior_folder) if selected is None or p in selected]
     exteriors = [V8Job(p, "exterior") for p in supported_images(exterior_folder) if selected is None or p in selected]
@@ -221,7 +233,7 @@ def generate_v8_reports(cache: ComparisonCache, jobs: list[V8Job], output_folder
     return before_pdf, after_pdf
 
 
-def process_v8_batch(client, *, interior_folder: Path, exterior_folder: Path, output_folder: Path, selected_files: set[Path] | None = None,
+def process_v8_batch(client, *, interior_folder: Path | None, exterior_folder: Path | None, output_folder: Path | None, selected_files: set[Path] | None = None,
                      quality: str = "medium", landscape: str = "Natural", distractions: str = "Remove",
                      event: Callable[[str, dict], None] = lambda _k, _p: None,
                      cancel_requested: Callable[[], bool] = lambda: False) -> V8Summary:
@@ -229,7 +241,12 @@ def process_v8_batch(client, *, interior_folder: Path, exterior_folder: Path, ou
     if quality not in QUALITY_OPTIONS:
         raise ValueError("V8 quality must be medium or high")
     jobs, _heroes = build_jobs(interior_folder, exterior_folder, selected_files)
-    output_folder = Path(output_folder).resolve(); output_folder.mkdir(parents=True, exist_ok=True)
+    if not jobs:
+        raise ValueError("Select at least one image before processing.")
+    valid_output, output_message = validate_output_folder(output_folder)
+    if not valid_output:
+        raise ValueError(output_message)
+    output_folder = Path(output_folder).resolve()
     cache = ComparisonCache(); summary = V8Summary(cache_root=cache.root)
     for job in jobs:
         cache.snapshot_before(job)
@@ -238,6 +255,10 @@ def process_v8_batch(client, *, interior_folder: Path, exterior_folder: Path, ou
             if cancel_requested():
                 event("cancelled", {"index": index, "total": len(jobs)})
                 break
+            # Recheck at the last safe point before every paid Images Edit call.
+            valid_output, output_message = validate_output_folder(output_folder)
+            if not valid_output:
+                raise ValueError(output_message)
             event("started", {"index": index, "total": len(jobs), "filename": job.output_name, "kind": job.kind})
             try:
                 destination = output_folder / job.output_name
@@ -273,11 +294,17 @@ class V8Window(QMainWindow):
     def __init__(self):
         super().__init__(); self.setWindowTitle("MyEstatePics AI Editor — V8.0"); self.resize(1180, 820)
         self.settings = QSettings(str(core.USER_DATA_DIR / "v8_preferences.ini"), QSettings.IniFormat)
-        self.interior = Path(self.settings.value("folders/interior", str(core.USER_DATA_DIR / "Interior")))
-        self.exterior = Path(self.settings.value("folders/exterior", str(core.USER_DATA_DIR / "Exterior")))
-        self.output = Path(self.settings.value("folders/output", str(core.USER_DATA_DIR / "Output")))
+        self.interior = self._restored_input("interior")
+        self.exterior = self._restored_input("exterior")
+        # Output is deliberately session-only.  Never restore a previous job's destination.
+        self.output: Path | None = None
         self.discovered: list[tuple[str, Path]] = []; self.selected_files: set[Path] = set(); self.updating_selection = False; self.cancel_requested = False
         self._build(); self.refresh_twilight()
+
+    def _restored_input(self, name: str) -> Path | None:
+        value = str(self.settings.value(f"folders/{name}", "") or "").strip()
+        candidate = Path(value) if value else None
+        return candidate if candidate and candidate.is_dir() else None
 
     def _build(self):
         self.setWindowTitle("MyEstatePics AI Editor — V8.0"); self.resize(1180, 820); self.setMinimumSize(1050, 720)
@@ -289,12 +316,15 @@ class V8Window(QMainWindow):
         self.paths = []
         self.folder_counts = {}
         for row, (label, attr) in enumerate((("Interior", "interior"), ("Exterior", "exterior"), ("Output", "output"))):
-            value = QLabel(); value.setTextInteractionFlags(Qt.TextSelectableByMouse); value.setToolTip(str(getattr(self, attr))); value.setMinimumWidth(450)
+            value = QLabel(); value.setTextInteractionFlags(Qt.TextSelectableByMouse); value.setToolTip(str(getattr(self, attr) or "")); value.setMinimumWidth(450)
             value.setStyleSheet("padding: 5px; border: 1px solid palette(mid); border-radius: 4px;")
             choose = QPushButton("Choose"); choose.setFixedWidth(76); open_button = QPushButton("Open"); open_button.setFixedWidth(76)
             choose.clicked.connect(lambda _=False, name=attr: self.browse(name)); open_button.clicked.connect(lambda _=False, name=attr: self.open_folder(name))
             count = QLabel(""); self.folder_counts[attr] = count
             form.addWidget(QLabel(label), row * 2, 0); form.addWidget(value, row * 2, 1); form.addWidget(choose, row * 2, 2); form.addWidget(open_button, row * 2, 3); form.addWidget(count, row * 2 + 1, 1, 1, 3); self.paths.append(value)
+            if attr == "output":
+                self.clear_output_button = QPushButton("Clear"); self.clear_output_button.setFixedWidth(76); self.clear_output_button.clicked.connect(self.clear_output)
+                form.addWidget(self.clear_output_button, row * 2, 4)
         self.rescan_button = QPushButton("Rescan"); self.rescan_button.clicked.connect(self.rescan); form.addWidget(self.rescan_button, 6, 2, 1, 2)
         layout.addWidget(setup)
         workspace = QHBoxLayout(); image_card = QGroupBox("IMAGES"); image_layout = QVBoxLayout(image_card); image_actions = QHBoxLayout()
@@ -323,18 +353,28 @@ class V8Window(QMainWindow):
         self.refresh_paths(); self.rescan()
 
     def browse(self, attr: str):
-        value = QFileDialog.getExistingDirectory(self, "Choose folder", str(getattr(self, attr)))
-        if value: setattr(self, attr, Path(value)); self.settings.setValue(f"folders/{attr}", value); self.refresh_paths(); self.rescan()
+        current = getattr(self, attr)
+        value = QFileDialog.getExistingDirectory(self, "Choose folder", str(current or Path.home()))
+        if value:
+            setattr(self, attr, Path(value))
+            if attr != "output":
+                self.settings.setValue(f"folders/{attr}", value)
+            self.refresh_paths(); self.rescan()
+
+    def clear_output(self):
+        self.output = None
+        self.refresh_paths(); self.refresh_preflight()
 
     def open_folder(self, attr: str):
-        path = Path(getattr(self, attr))
-        if path.is_dir(): subprocess.Popen(["open", str(path)])
+        path = getattr(self, attr)
+        if path and Path(path).is_dir(): subprocess.Popen(["open", str(path)])
 
     def refresh_paths(self):
         for attr, label in zip(("interior", "exterior", "output"), self.paths):
-            path = Path(getattr(self, attr)); selected = path.is_dir() and path != core.USER_DATA_DIR / attr.title()
-            label.setText(str(path) if selected else "Not selected"); label.setToolTip(str(path))
-            self.folder_counts[attr].setText(f"{len(supported_images(path))} images" if path.is_dir() and attr != "output" else "")
+            path = getattr(self, attr)
+            selected = path is not None and Path(path).is_dir()
+            label.setText(str(path) if selected else "Not selected"); label.setToolTip(str(path or ""))
+            self.folder_counts[attr].setText(f"{len(supported_images(Path(path)))} images" if selected and attr != "output" else "")
 
     def rescan(self, preserve_empty: bool = False):
         previous = set(self.selected_files); self.discovered = [("INTERIOR", p) for p in supported_images(self.interior)] + [("EXTERIOR", p) for p in supported_images(self.exterior)]
@@ -355,20 +395,24 @@ class V8Window(QMainWindow):
         self.refresh_preflight()
 
     def refresh_twilight(self):
-        heroes = [p for p in red_tagged_images(self.exterior) if p in self.selected_files] if self.exterior.is_dir() else []
+        heroes = [p for p in red_tagged_images(self.exterior) if p in self.selected_files] if self.exterior else []
         message = "Only one selected Exterior image may have the RED Finder tag: " + ", ".join(p.name for p in heroes) if len(heroes) > 1 else ""
         self.hero.setText("🔴 " + heroes[0].name if len(heroes) == 1 else "🔴 No red-tagged exterior detected" if not heroes else "⚠ Multiple red-tagged exterior images detected")
         if message: self.status.setText(message); self.hero_note.setText(message)
 
     def refresh_preflight(self, *_):
         self.refresh_twilight(); interior = sum(1 for kind, p in self.discovered if kind == "INTERIOR" and p in self.selected_files); exterior = sum(1 for kind, p in self.discovered if kind == "EXTERIOR" and p in self.selected_files)
-        heroes = [p for p in red_tagged_images(self.exterior) if p in self.selected_files] if self.exterior.is_dir() else []
+        heroes = [p for p in red_tagged_images(self.exterior) if p in self.selected_files] if self.exterior else []
         ok = len(heroes) <= 1; message = "Resolve multiple Twilight tags before processing" if not ok else ""
         generations = interior + exterior + len(heroes); cost = generations * core.estimated_cost_per_image(self.quality.currentText().lower())
         self.images_title.setText(f"IMAGES — {len(self.selected_files)} selected")
-        self.preflight.setText(f"Interior {interior}    Exterior {exterior}    Twilight {len(heroes)}\nAPI Generations {generations}    Estimated Cost ${cost:.2f}")
-        ready = bool(interior or exterior) and self.output.is_dir() and ok
-        self.start.setEnabled(ready); self.ready.setText(f"Ready to process {generations} generations" if ready else message or "Select an Interior or Exterior folder and an Output folder")
+        output_ok, output_message = validate_output_folder(self.output)
+        api_key, api_message = load_v8_api_key()
+        output_display = str(self.output) if self.output else "NOT SELECTED"
+        self.preflight.setText(f"Interior {interior}    Exterior {exterior}    Twilight {len(heroes)}\nAPI Generations {generations}    Estimated Cost ${cost:.2f}\nOutput: {output_display}")
+        ready = bool(interior or exterior) and output_ok and bool(api_key) and ok
+        self.start.setEnabled(ready)
+        self.ready.setText(f"Ready to process {generations} generations" if ready else message or output_message if not output_ok else api_message if not api_key else "Select at least one image")
 
     def validate_start(self):
         try:
@@ -380,6 +424,11 @@ class V8Window(QMainWindow):
         """Use V7's canonical API-key loader; preflight blocks multiple heroes before any call."""
         try:
             jobs, _heroes = build_jobs(self.interior, self.exterior, self.selected_files)
+            if not jobs:
+                self.status.setText("Select at least one image before processing."); return
+            valid_output, output_message = validate_output_folder(self.output)
+            if not valid_output:
+                self.status.setText(output_message); return
             api_key, message = load_v8_api_key()
             if not api_key:
                 self.status.setText(message); return
