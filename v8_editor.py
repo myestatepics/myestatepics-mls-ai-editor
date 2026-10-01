@@ -23,7 +23,7 @@ from PySide6.QtCore import QSettings, Qt
 from PySide6.QtWidgets import (QApplication, QComboBox, QFileDialog,
     QFormLayout, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QMainWindow,
     QPlainTextEdit, QProgressBar, QPushButton, QRadioButton, QTableWidget,
-    QTableWidgetItem, QVBoxLayout, QWidget, QMessageBox)
+    QTableWidgetItem, QVBoxLayout, QWidget, QMessageBox, QHeaderView)
 
 PROGRAM_VERSION = "8.0"
 MODEL = "gpt-image-2.5-sunburst"
@@ -283,6 +283,30 @@ def process_v8_batch(client, *, interior_folder: Path | None, exterior_folder: P
         raise
 
 
+class ElidedPathLabel(QLabel):
+    """A native-looking path field that keeps its full value in the tooltip."""
+    def __init__(self) -> None:
+        super().__init__()
+        self.full_text = ""
+        self.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.setMinimumWidth(260); self.setMinimumHeight(32)
+        self.setStyleSheet("padding: 6px 8px; border: 1px solid palette(mid); border-radius: 5px;")
+
+    def set_path(self, value: str) -> None:
+        self.full_text = value
+        self.setToolTip(value)
+        self._refresh_elision()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._refresh_elision()
+
+    def _refresh_elision(self) -> None:
+        if not self.full_text:
+            return
+        self.setText(self.fontMetrics().elidedText(self.full_text, Qt.ElideMiddle, max(30, self.width() - 16)))
+
+
 class V8Window(QMainWindow):
     def __init__(self):
         super().__init__(); self.setWindowTitle("MyEstatePics AI Editor — V8.0"); self.resize(1180, 820)
@@ -300,52 +324,86 @@ class V8Window(QMainWindow):
         return candidate if candidate and candidate.is_dir() else None
 
     def _build(self):
-        self.setWindowTitle("MyEstatePics AI Editor — V8.0"); self.resize(1180, 820); self.setMinimumSize(1050, 720)
-        root = QWidget(); layout = QVBoxLayout(root); layout.setContentsMargins(22, 18, 22, 18); layout.setSpacing(10)
-        header = QHBoxLayout(); title = QLabel("MyEstatePics AI Editor V8.0"); title.setStyleSheet("font-size: 21px; font-weight: 700;")
-        subtitle = QLabel("MLS Production Editor"); api_key, _message = load_v8_api_key(); model = QLabel(f"Sunburst\nAPI: {'Ready' if api_key else 'Not configured'}")
-        header.addWidget(title); header.addWidget(subtitle, 1); header.addWidget(model); layout.addLayout(header)
-        setup = QGroupBox("JOB SETUP"); form = QGridLayout(setup); form.setColumnStretch(1, 1)
-        self.paths = []
-        self.folder_counts = {}
-        for row, (label, attr) in enumerate((("Interior", "interior"), ("Exterior", "exterior"), ("Output", "output"))):
-            value = QLabel(); value.setTextInteractionFlags(Qt.TextSelectableByMouse); value.setToolTip(str(getattr(self, attr) or "")); value.setMinimumWidth(450)
-            value.setStyleSheet("padding: 5px; border: 1px solid palette(mid); border-radius: 4px;")
-            choose = QPushButton("Choose"); choose.setFixedWidth(76); open_button = QPushButton("Open"); open_button.setFixedWidth(76)
+        self.setWindowTitle("MyEstatePics AI Editor — V8.0"); self.resize(1200, 820); self.setMinimumSize(1050, 800)
+        root = QWidget(); layout = QVBoxLayout(root); layout.setContentsMargins(22, 16, 22, 16); layout.setSpacing(10)
+
+        header = QHBoxLayout(); header.setSpacing(12)
+        title_block = QVBoxLayout(); title = QLabel("MyEstatePics AI Editor V8.0"); title.setStyleSheet("font-size: 21px; font-weight: 700;")
+        subtitle = QLabel("MLS Production Editor"); title_block.addWidget(title); title_block.addWidget(subtitle)
+        api_key, _message = load_v8_api_key(); model = QLabel(f"Sunburst\nAPI: {'Ready' if api_key else 'Not configured'}"); model.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        header.addLayout(title_block); header.addStretch(1); header.addWidget(model); layout.addLayout(header)
+
+        setup = QGroupBox("JOB SETUP"); setup.setMinimumHeight(128); setup.setMaximumHeight(128); form = QGridLayout(setup); form.setContentsMargins(16, 10, 16, 10); form.setHorizontalSpacing(10); form.setVerticalSpacing(5); form.setColumnStretch(1, 1)
+        self.paths = []; self.folder_counts = {}
+        for row, (label_text, attr) in enumerate((("Interior", "interior"), ("Exterior", "exterior"), ("Output", "output"))):
+            label = QLabel(label_text); label.setMinimumWidth(66)
+            value = ElidedPathLabel(); choose = QPushButton("Choose"); open_button = QPushButton("Open")
+            choose.setMinimumWidth(82); open_button.setMinimumWidth(70)
             choose.clicked.connect(lambda _=False, name=attr: self.browse(name)); open_button.clicked.connect(lambda _=False, name=attr: self.open_folder(name))
             count = QLabel(""); self.folder_counts[attr] = count
-            form.addWidget(QLabel(label), row * 2, 0); form.addWidget(value, row * 2, 1); form.addWidget(choose, row * 2, 2); form.addWidget(open_button, row * 2, 3); form.addWidget(count, row * 2 + 1, 1, 1, 3); self.paths.append(value)
+            form.addWidget(label, row, 0); form.addWidget(value, row, 1); form.addWidget(choose, row, 2); form.addWidget(open_button, row, 3); form.addWidget(count, row, 4)
+            self.paths.append(value)
             if attr == "output":
-                self.clear_output_button = QPushButton("Clear"); self.clear_output_button.setFixedWidth(76); self.clear_output_button.clicked.connect(self.clear_output)
-                form.addWidget(self.clear_output_button, row * 2, 4)
-        self.rescan_button = QPushButton("Rescan"); self.rescan_button.clicked.connect(self.rescan); form.addWidget(self.rescan_button, 6, 2, 1, 2)
+                self.clear_output_button = QPushButton("Clear"); self.clear_output_button.setMinimumWidth(70); self.clear_output_button.clicked.connect(self.clear_output)
+                form.addWidget(self.clear_output_button, row, 4)
+        self.rescan_button = QPushButton("Rescan"); self.rescan_button.setMinimumWidth(82); self.rescan_button.clicked.connect(self.rescan); form.addWidget(self.rescan_button, 3, 3)
         layout.addWidget(setup)
-        workspace = QHBoxLayout(); image_card = QGroupBox("IMAGES"); image_layout = QVBoxLayout(image_card); image_actions = QHBoxLayout()
-        self.images_title = QLabel("IMAGES — 0 selected"); self.images_title.setStyleSheet("font-weight: 700;")
-        self.select_all_button = QPushButton("Select All"); self.clear_all_button = QPushButton("Clear All")
+
+        workspace = QHBoxLayout(); workspace.setSpacing(14)
+        image_card = QGroupBox("IMAGES"); image_layout = QVBoxLayout(image_card); image_layout.setContentsMargins(14, 14, 14, 14); image_layout.setSpacing(10)
+        image_actions = QHBoxLayout(); self.images_title = QLabel("IMAGES — 0 selected"); self.images_title.setStyleSheet("font-weight: 700;")
+        self.select_all_button = QPushButton("Select All"); self.clear_all_button = QPushButton("Clear All"); self.select_all_button.setMinimumWidth(88); self.clear_all_button.setMinimumWidth(88)
         self.select_all_button.clicked.connect(self.select_all); self.clear_all_button.clicked.connect(self.clear_all)
         image_actions.addWidget(self.images_title); image_actions.addStretch(1); image_actions.addWidget(self.select_all_button); image_actions.addWidget(self.clear_all_button); image_layout.addLayout(image_actions)
-        self.images = QTableWidget(0, 3); self.images.setHorizontalHeaderLabels(["TYPE", "FILE", "SELECTED / STATUS"]); self.images.horizontalHeader().setStretchLastSection(True); self.images.setMinimumHeight(300); self.images.itemChanged.connect(self.selection_changed); image_layout.addWidget(self.images)
-        options = QGroupBox("EXTERIOR OPTIONS"); opt = QGridLayout(options); opt.setColumnStretch(1, 1)
+        self.images = QTableWidget(0, 3); self.images.setHorizontalHeaderLabels(["TYPE", "FILE", "STATUS"]); self.images.setAlternatingRowColors(True); self.images.setMinimumHeight(195); self.images.verticalHeader().setDefaultSectionSize(26)
+        image_header = self.images.horizontalHeader(); image_header.setSectionResizeMode(0, QHeaderView.Fixed); image_header.setSectionResizeMode(1, QHeaderView.Stretch); image_header.setSectionResizeMode(2, QHeaderView.Fixed); self.images.setColumnWidth(0, 82); self.images.setColumnWidth(2, 128)
+        self.images.itemChanged.connect(self.selection_changed); image_layout.addWidget(self.images)
+
+        image_card.setMinimumHeight(270); options = QGroupBox("EXTERIOR OPTIONS"); options.setMinimumHeight(270); opt = QVBoxLayout(options); opt.setContentsMargins(16, 12, 16, 12); opt.setSpacing(4)
+        landscape_title = QLabel("LANDSCAPE"); landscape_title.setStyleSheet("font-weight: 700;")
         self.natural = QRadioButton("Natural"); self.enhanced = QRadioButton("Enhanced"); self.natural.setChecked(True)
+        landscape = QHBoxLayout(); landscape.addWidget(landscape_title); landscape.addStretch(1); landscape.addWidget(self.natural); landscape.addWidget(self.enhanced); opt.addLayout(landscape); opt.addWidget(QLabel("Preserve existing lawn and landscaping"))
+        distractions_title = QLabel("DISTRACTIONS"); distractions_title.setStyleSheet("font-weight: 700;")
         self.remove = QRadioButton("Remove"); self.keep = QRadioButton("Keep"); self.remove.setChecked(True)
-        landscape = QHBoxLayout(); landscape.addWidget(self.natural); landscape.addWidget(self.enhanced); landscape.addStretch(1)
-        distractions = QHBoxLayout(); distractions.addWidget(self.remove); distractions.addWidget(self.keep); distractions.addStretch(1)
-        opt.addWidget(QLabel("Landscape"), 0, 0); opt.addLayout(landscape, 0, 1); opt.addWidget(QLabel("Preserve existing lawn and landscaping"), 1, 1)
-        opt.addWidget(QLabel("Distractions"), 2, 0); opt.addLayout(distractions, 2, 1); opt.addWidget(QLabel("Remove temporary distractions"), 3, 1)
-        self.hero = QLabel("Not selected"); self.choose_hero_button = QPushButton("Choose Hero Image"); self.clear_hero_button = QPushButton("Clear"); self.choose_hero_button.clicked.connect(self.choose_hero); self.clear_hero_button.clicked.connect(self.clear_hero)
-        hero_actions = QHBoxLayout(); hero_actions.addWidget(self.hero, 1); hero_actions.addWidget(self.choose_hero_button); hero_actions.addWidget(self.clear_hero_button)
-        self.hero_note = QLabel("Optional: generates one additional early-twilight image."); self.quality = QComboBox(); self.quality.addItems(["MEDIUM", "HIGH"]); self.quality.setFixedWidth(130)
-        opt.addWidget(QLabel("Twilight Hero"), 4, 0); opt.addLayout(hero_actions, 4, 1); opt.addWidget(self.hero_note, 5, 1); opt.addWidget(QLabel("Quality"), 6, 0); opt.addWidget(self.quality, 6, 1)
-        workspace.addWidget(image_card, 11); workspace.addWidget(options, 9); layout.addLayout(workspace, 1)
-        preflight = QGroupBox("PRE-FLIGHT"); pre = QGridLayout(preflight); self.preflight = QLabel(); self.ready = QLabel(); self.start = QPushButton("START PROCESSING"); self.start.setFixedWidth(210); self.start.clicked.connect(self.start_processing)
-        pre.addWidget(self.preflight, 0, 0); pre.addWidget(self.ready, 1, 0); pre.addWidget(self.start, 0, 1, 2, 1); layout.addWidget(preflight)
-        processing = QGroupBox("PROCESSING"); process = QVBoxLayout(processing); self.progress = QProgressBar(); self.progress.setTextVisible(True); self.status = QLabel("Ready"); self.counts = QLabel("Completed 0    Review 0    Errors 0"); self.cancel_button = QPushButton("Cancel"); self.cancel_button.setEnabled(False); self.cancel_button.clicked.connect(self.request_cancel); self.review_button = QPushButton("Review Results"); self.review_button.setEnabled(False); self.review_button.clicked.connect(self.open_review_results); self.open_output_button = QPushButton("Open Output"); self.open_output_button.clicked.connect(lambda: self.open_folder("output")); buttons = QHBoxLayout(); buttons.addWidget(self.cancel_button); buttons.addWidget(self.review_button); buttons.addWidget(self.open_output_button); buttons.addStretch(1); process.addWidget(self.progress); process.addWidget(self.status); process.addWidget(self.counts); process.addLayout(buttons); layout.addWidget(processing)
-        self.details = QGroupBox("DETAILS"); self.details.setCheckable(True); self.details.setChecked(False); al = QVBoxLayout(self.details); self.activity = QTableWidget(0, 3); self.activity.setHorizontalHeaderLabels(["TYPE", "FILE", "STATUS"]); self.activity.horizontalHeader().setStretchLastSection(True); self.activity.setMaximumHeight(170); al.addWidget(self.activity); self.activity.setVisible(False); self.details.toggled.connect(self.activity.setVisible); layout.addWidget(self.details); self.setCentralWidget(root)
+        distractions = QHBoxLayout(); distractions.addWidget(distractions_title); distractions.addStretch(1); distractions.addWidget(self.remove); distractions.addWidget(self.keep); opt.addLayout(distractions); opt.addWidget(QLabel("Remove temporary distractions"))
+        quality_row = QHBoxLayout(); quality_title = QLabel("QUALITY"); quality_title.setStyleSheet("font-weight: 700;"); self.quality = QComboBox(); self.quality.addItems(["MEDIUM", "HIGH"]); self.quality.setMinimumWidth(135); quality_row.addWidget(quality_title); quality_row.addStretch(1); quality_row.addWidget(self.quality); opt.addLayout(quality_row)
+        hero_box = QGroupBox("TWILIGHT HERO"); hero_layout = QVBoxLayout(hero_box); hero_layout.setContentsMargins(10, 9, 10, 9); hero_layout.setSpacing(5)
+        hero_selected = QHBoxLayout(); hero_selected.addWidget(QLabel("Selected:")); self.hero = QLabel("Not selected"); self.hero.setTextInteractionFlags(Qt.TextSelectableByMouse); hero_selected.addWidget(self.hero, 1); hero_layout.addLayout(hero_selected)
+        self.choose_hero_button = QPushButton("Choose Hero Image"); self.clear_hero_button = QPushButton("Clear"); self.choose_hero_button.setMinimumWidth(170); self.clear_hero_button.setMinimumWidth(78); self.choose_hero_button.setMinimumHeight(30); self.clear_hero_button.setMinimumHeight(30); self.choose_hero_button.clicked.connect(self.choose_hero); self.clear_hero_button.clicked.connect(self.clear_hero)
+        hero_actions = QHBoxLayout(); hero_actions.addWidget(self.choose_hero_button); hero_actions.addWidget(self.clear_hero_button); hero_actions.addStretch(1); hero_layout.addLayout(hero_actions); self.hero_note = QLabel("Optional — generates one additional early-twilight image."); self.hero_note.setWordWrap(True); hero_layout.addWidget(self.hero_note); opt.addWidget(hero_box); opt.addStretch(1)
+        workspace.addWidget(image_card, 6); workspace.addWidget(options, 4); layout.addLayout(workspace, 1)
+
+        preflight = QGroupBox("PRE-FLIGHT"); preflight.setMinimumHeight(118); preflight.setMaximumHeight(118); pre = QVBoxLayout(preflight); pre.setContentsMargins(16, 7, 16, 7); pre.setSpacing(4)
+        self.interior_metric = QLabel(); self.exterior_metric = QLabel(); self.twilight_metric = QLabel(); self.generations_metric = QLabel()
+        metrics = QHBoxLayout(); metrics.setSpacing(28)
+        for caption, value in (("INTERIOR", self.interior_metric), ("EXTERIOR", self.exterior_metric), ("TWILIGHT", self.twilight_metric), ("GENERATIONS", self.generations_metric)):
+            metric = QVBoxLayout(); metric.setSpacing(0); heading = QLabel(caption); heading.setStyleSheet("font-weight: 700;"); metric.addWidget(heading); metric.addWidget(value); metrics.addLayout(metric)
+        metrics.addStretch(1); pre.addLayout(metrics)
+        self.cost_metric = QLabel(); self.output_metric = QLabel(); self.preflight = QLabel(); self.ready = QLabel(); self.ready.setWordWrap(True)
+        lower = QHBoxLayout(); lower.setSpacing(18)
+        cost = QVBoxLayout(); cost.setSpacing(0); cost_label = QLabel("ESTIMATED COST"); cost_label.setStyleSheet("font-weight: 700;"); cost.addWidget(cost_label); cost.addWidget(self.cost_metric); lower.addLayout(cost)
+        output = QVBoxLayout(); output.setSpacing(0); output_label = QLabel("OUTPUT"); output_label.setStyleSheet("font-weight: 700;"); output.addWidget(output_label); output.addWidget(self.output_metric); lower.addLayout(output, 1)
+        lower.addWidget(self.ready, 2)
+        self.start = QPushButton("START PROCESSING"); self.start.setMinimumWidth(230); self.start.setMinimumHeight(38); self.start.clicked.connect(self.start_processing)
+        lower.addWidget(self.start); pre.addLayout(lower); layout.addWidget(preflight)
+
+        processing = QGroupBox("PROCESSING"); processing.setMinimumHeight(108); processing.setMaximumHeight(108); process = QVBoxLayout(processing); process.setContentsMargins(16, 8, 16, 8); process.setSpacing(4)
+        self.progress = QProgressBar(); self.progress.setTextVisible(True); self.status = QLabel("Ready"); self.counts = QLabel("Completed 0    Review 0    Errors 0")
+        self.cancel_button = QPushButton("Cancel"); self.cancel_button.setMinimumWidth(78); self.cancel_button.setEnabled(False); self.cancel_button.clicked.connect(self.request_cancel)
+        self.review_button = QPushButton("Review Results"); self.review_button.setMinimumWidth(116); self.review_button.setEnabled(False); self.review_button.clicked.connect(self.open_review_results)
+        self.open_output_button = QPushButton("Open Output"); self.open_output_button.setMinimumWidth(100); self.open_output_button.clicked.connect(lambda: self.open_folder("output"))
+        buttons = QHBoxLayout(); buttons.addWidget(self.cancel_button); buttons.addWidget(self.review_button); buttons.addWidget(self.open_output_button); buttons.addStretch(1); process.addWidget(self.progress); process.addWidget(self.status); process.addWidget(self.counts); process.addLayout(buttons); layout.addWidget(processing)
+
+        self.details = QGroupBox("DETAILS"); self.details.setCheckable(True); self.details.setChecked(False); self.details.setMaximumHeight(28); al = QVBoxLayout(self.details); self.activity = QTableWidget(0, 3); self.activity.setHorizontalHeaderLabels(["TYPE", "FILE", "STATUS"]); self.activity.horizontalHeader().setStretchLastSection(True); self.activity.setMaximumHeight(170); al.addWidget(self.activity); self.activity.setVisible(False); self.details.toggled.connect(self._toggle_details); layout.addWidget(self.details); self.setCentralWidget(root)
         for control in (self.natural, self.enhanced, self.remove, self.keep, self.quality):
             signal = control.toggled if hasattr(control, "toggled") else control.currentTextChanged
             signal.connect(self.refresh_preflight)
         self.refresh_paths(); self.rescan()
+
+    def _toggle_details(self, expanded: bool) -> None:
+        """Keep diagnostics available without consuming the production workspace."""
+        self.activity.setVisible(expanded)
+        self.details.setMaximumHeight(210 if expanded else 28)
 
     def browse(self, attr: str):
         current = getattr(self, attr)
@@ -391,7 +449,7 @@ class V8Window(QMainWindow):
         for attr, label in zip(("interior", "exterior", "output"), self.paths):
             path = getattr(self, attr)
             selected = path is not None and Path(path).is_dir()
-            label.setText(str(path) if selected else "Not selected"); label.setToolTip(str(path or ""))
+            label.set_path(str(path) if selected else "Not selected")
             self.folder_counts[attr].setText(f"{len(supported_images(Path(path)))} images" if selected and attr != "output" else "")
 
     def rescan(self, preserve_empty: bool = False):
@@ -435,6 +493,8 @@ class V8Window(QMainWindow):
         output_ok, output_message = validate_output_folder(self.output)
         api_key, api_message = load_v8_api_key()
         output_display = str(self.output) if self.output else "NOT SELECTED"
+        self.interior_metric.setText(str(interior)); self.exterior_metric.setText(str(exterior)); self.twilight_metric.setText(str(hero_count)); self.generations_metric.setText(str(generations)); self.cost_metric.setText(f"${cost:.2f}")
+        self.output_metric.setText(output_display); self.output_metric.setToolTip(output_display)
         self.preflight.setText(f"Interior {interior}    Exterior {exterior}    Twilight {hero_count}\nAPI Generations {generations}    Estimated Cost ${cost:.2f}\nOutput: {output_display}")
         ready = bool(interior or exterior) and output_ok and bool(api_key) and valid_hero
         self.start.setEnabled(ready)

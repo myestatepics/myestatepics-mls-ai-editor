@@ -200,3 +200,53 @@ def test_heic_and_heif_discovery_and_normalized_upload(monkeypatch, tmp_path, su
         assert source.read_bytes() == original
     finally:
         upload.unlink(missing_ok=True)
+
+
+def test_v8_workflow_controls_remain_usable_at_default_and_minimum_size(monkeypatch, tmp_path):
+    _v8, app, window = v8_window(monkeypatch, tmp_path)
+    try:
+        for width, height in ((1200, 820), (1050, 800)):
+            window.resize(width, height); window.show(); app.processEvents()
+            assert window.choose_hero_button.isVisible()
+            assert window.clear_hero_button.isVisible()
+            assert window.choose_hero_button.width() >= 170
+            assert window.clear_hero_button.width() >= 78
+            assert window.start.isVisible() and window.start.width() >= 230
+            assert window.clear_output_button.isVisible()
+            assert window.select_all_button.isVisible() and window.clear_all_button.isVisible()
+            assert window.images.viewport().height() >= 170
+            assert window.choose_hero_button.geometry().bottom() <= window.centralWidget().height()
+            assert window.clear_hero_button.geometry().bottom() <= window.centralWidget().height()
+    finally:
+        window.close()
+
+
+def test_v8_ui_contains_no_finder_tag_language(monkeypatch, tmp_path):
+    _v8, app, window = v8_window(monkeypatch, tmp_path)
+    try:
+        window.show(); app.processEvents()
+        visible_text = "\n".join(label.text() for label in window.findChildren(type(window.hero)))
+        assert "FINDER" not in visible_text.upper()
+        assert "RED TAG" not in visible_text.upper()
+    finally:
+        window.close()
+
+
+def test_v8_ui_rescan_and_selection_support_interior_exterior_and_mixed_jobs(monkeypatch, tmp_path):
+    _v8, app, window = v8_window(monkeypatch, tmp_path)
+    try:
+        interior = tmp_path / "interior"; exterior = tmp_path / "exterior"; output = tmp_path / "output"
+        interior.mkdir(); exterior.mkdir(); output.mkdir()
+        jpeg(interior / "inside.jpg"); jpeg(exterior / "outside.jpg")
+        window.interior = interior; window.output = output; window.rescan(); app.processEvents()
+        assert window.images.rowCount() == 1 and len(window.selected_files) == 1 and window.start.isEnabled()
+        window.exterior = exterior; window.rescan(); app.processEvents()
+        assert window.images.rowCount() == 2 and len(window.selected_files) == 1 and window.start.isEnabled()
+        window.select_all(); app.processEvents(); assert len(window.selected_files) == 2
+        window.clear_all(); app.processEvents(); assert not window.selected_files and not window.start.isEnabled()
+        window.images.item(0, 2).setCheckState(_v8.Qt.Checked); app.processEvents()
+        assert len(window.selected_files) == 1
+        window.select_all(); app.processEvents(); assert len(window.selected_files) == 2
+        window.clear_output(); app.processEvents(); assert window.output is None and not window.start.isEnabled()
+    finally:
+        window.close()
